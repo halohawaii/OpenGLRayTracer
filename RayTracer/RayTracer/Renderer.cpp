@@ -205,6 +205,31 @@ void Renderer::Render(const Scene& scene)
     glBufferData(GL_SHADER_STORAGE_BUFFER, lightIndices.size() * sizeof(int), lightIndices.data(), GL_STATIC_DRAW);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 5, lightSSBO);
 
+    //GBuffer
+    GLuint gNormal;
+    glGenTextures(1, &gNormal);
+    glBindTexture(GL_TEXTURE_2D, gNormal);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, scene.width, scene.height, 0, GL_RGBA, GL_FLOAT, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glBindImageTexture(6, gNormal, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA32F);
+
+    GLuint gDepth;
+    glGenTextures(1, &gDepth);
+    glBindTexture(GL_TEXTURE_2D, gDepth);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, scene.width, scene.height, 0, GL_RED, GL_FLOAT, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glBindImageTexture(7, gDepth, 0, GL_FALSE, 0, GL_READ_WRITE, GL_R32F);
+
+    //Denoise
+    GLuint finalTexture;
+    glGenTextures(1, &finalTexture);
+    glBindTexture(GL_TEXTURE_2D, finalTexture);
+    glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA32F, scene.width, scene.height);
+    // 绑定到 binding = 0 (对应 Shader 中的 layout)
+    glBindImageTexture(0, finalTexture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
+
     // ---------- Read Compute Shader ----------
     std::string csSource = LoadTextFile("raygen.glsl");
     if (csSource.empty())
@@ -218,11 +243,21 @@ void Renderer::Render(const Scene& scene)
     glUniform1i(glGetUniformLocation(rayGenProgram, "imageHeight"), scene.height);
     glUniform1i(glGetUniformLocation(rayGenProgram, "u_lightCount"), (int)lightIndices.size());
 
+    std::string denoiseSource = LoadTextFile("Denoise.glsl");
+    GLuint denoiseProgram = CompileComputeShader(denoiseSource.c_str());
+
+    // 获取 Uniform 位置
+    GLint denoiseWidthLoc = glGetUniformLocation(denoiseProgram, "width");
+    GLint denoiseHeightLoc = glGetUniformLocation(denoiseProgram, "height");
+
     auto start = std::chrono::system_clock::now();
-    int spp = 4;
+    int spp = 64;
     int currentFrame = 0;
     while (!glfwWindowShouldClose(window) && currentFrame < spp)
     {
+        glUseProgram(rayGenProgram);
+        //glBindBufferBase(GL_UNIFORM_BUFFER, 0, cameraUBO);
+
         glUniform1i(frameCountLoc, currentFrame);
 
         glDispatchCompute(
@@ -232,8 +267,22 @@ void Renderer::Render(const Scene& scene)
         );
 
         glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+        //glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
 
+        /*
+        //Denoise
+        glUseProgram(denoiseProgram);
+        glBindImageTexture(0, finalTexture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
+        glUniform1i(denoiseWidthLoc, scene.width);
+        glUniform1i(denoiseHeightLoc, scene.height);
+        glDispatchCompute((scene.width + 7) / 8, (scene.height + 7) / 8, 1);
 
+        glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+
+        
+        glBindFramebuffer(GL_FRAMEBUFFER, srcFBO);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, finalTexture, 0);
+        */
         glBindFramebuffer(GL_READ_FRAMEBUFFER, srcFBO);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
 
@@ -253,6 +302,28 @@ void Renderer::Render(const Scene& scene)
     }
     auto stop = std::chrono::system_clock::now();
     std::cout << "Render Time: " << std::chrono::duration_cast<std::chrono::milliseconds>(stop - start).count() << "milliseconds\n\n";
+
+    
+    std::cout << "Rendering finished. Denoising..." << std::endl;
+
+    glUseProgram(denoiseProgram);
+    // 此时再霸占 binding 0
+    glBindImageTexture(0, finalTexture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
+    // 绑定输入资源 (outputTexture, gNormal, gDepth)
+    // ... glBindImageTexture ...
+
+    glUniform1i(denoiseWidthLoc, scene.width);
+    glUniform1i(denoiseHeightLoc, scene.height);
+    glDispatchCompute((scene.width + 7) / 8, (scene.height + 7) / 8, 1);
+
+    glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+
+    // 3. 最后显示降噪后的结果
+    glBindFramebuffer(GL_FRAMEBUFFER, srcFBO);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, finalTexture, 0);
+    // ... 执行最后的 glBlitFramebuffer ...
+    glfwSwapBuffers(window);
+    
 
     /*glDispatchCompute(
         (scene.width + 7) / 8,

@@ -62,6 +62,9 @@ layout(std430, binding = 5) buffer LightIndexBuffer {
     int lightIndices[]; // light triangles
 };
 
+layout(rgba32f, binding = 6) uniform image2D gNormal;
+layout(r32f, binding = 7) uniform image2D gDepth;
+
 uniform int imageWidth;
 uniform int imageHeight;
 uniform int frameCount;
@@ -337,6 +340,27 @@ void main()
     float y = (1.0 - 2.0 * (float(j) + 0.5) / float(imageHeight))
               * scale;
     vec3 dir = normalize(vec3(-x, y, 1.0));
+
+    //Write GBuffer
+    float firstT;
+    int firstHitIdx;
+    vec3 normalView = vec3(0);
+    // 专门做一次检测，拿到相机直接看到的第一个物体
+    if (intersectScene(camPos, dir, firstT, firstHitIdx)) {
+        // 1. 计算并存储法线
+        vec3 N = normalize(triangles[firstHitIdx].normal);
+        // 映射到 [0,1] 方便观察，存入 binding = 6
+        normalView = N * 0.5 + 0.5;
+        imageStore(gNormal, ivec2(i, j), vec4(normalView, 1.0));
+        
+        // 2. 存储深度值，存入 binding = 7
+        imageStore(gDepth, ivec2(i, j), vec4(firstT, 0.0, 0.0, 1.0));
+    } else {
+        // 没撞到东西（背景）
+        imageStore(gNormal, ivec2(i, j), vec4(0.0, 0.0, 0.0, 1.0));
+        imageStore(gDepth, ivec2(i, j), vec4(10000.0, 0.0, 0.0, 1.0));
+    }
+
     vec3 currentSample = Render(dir);
     if (frameCount == 0) {
         imageStore(outImage, ivec2(i, j), vec4(currentSample, 1.0));
@@ -348,6 +372,8 @@ void main()
         imageStore(outImage, ivec2(i, j), vec4(accumulated, 1.0));
     }
     
+    imageStore(gNormal, ivec2(i, j), vec4(normalView, 1.0));
+    imageStore(gDepth, ivec2(i, j), vec4(firstT, 0.0, 0.0, 1.0));
 }
 
 

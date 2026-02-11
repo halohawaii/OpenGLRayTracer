@@ -91,5 +91,8 @@
     <None Include="raygen.glsl">
       <Filter>资源文件</Filter>
     </None>
+    <None Include="Denoise.glsl">
+      <Filter>资源文件</Filter>
+    </None>
   </ItemGroup>
 </Project>
