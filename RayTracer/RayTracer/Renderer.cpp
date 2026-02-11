@@ -300,8 +300,7 @@ void Renderer::Render(const Scene& scene)
             std::cout << "Progress: " << currentFrame << "/" << spp << " SPP" << std::endl;
         }
     }
-    auto stop = std::chrono::system_clock::now();
-    std::cout << "Render Time: " << std::chrono::duration_cast<std::chrono::milliseconds>(stop - start).count() << "milliseconds\n\n";
+    
 
     
     std::cout << "Rendering finished. Denoising..." << std::endl;
@@ -324,7 +323,8 @@ void Renderer::Render(const Scene& scene)
     // ... 执行最后的 glBlitFramebuffer ...
     glfwSwapBuffers(window);
     
-
+    auto stop = std::chrono::system_clock::now();
+    std::cout << "Render Time: " << std::chrono::duration_cast<std::chrono::milliseconds>(stop - start).count() << "milliseconds\n\n";
     /*glDispatchCompute(
         (scene.width + 7) / 8,
         (scene.height + 7) / 8,

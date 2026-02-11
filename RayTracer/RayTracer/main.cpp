@@ -30,7 +30,7 @@ int main(int argc, char** argv)
 
     std::string rootPath = "D:/711/OpenGLRayTracer/RayTracer/RayTracer/";
     MeshTriangle floor(rootPath + "models/cornellbox/floor.obj", white);
-    MeshTriangle ball1 (rootPath + "models/cornellbox/ball1.obj", white);
+    MeshTriangle ball1 (rootPath + "models/bunny/bunny2.obj", white);
     MeshTriangle ball2(rootPath + "models/cornellbox/ball2.obj", white);
     MeshTriangle left(rootPath + "models/cornellbox/left.obj", red);
     MeshTriangle right(rootPath + "models/cornellbox/right.obj", green);
