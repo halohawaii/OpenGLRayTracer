@@ -57,9 +57,14 @@ struct TriangleGPU {
     float v0[3], pad0;
     float v1[3], pad1;
     float v2[3], pad2;
-    float normal[3], pad3;   // 新增：面法线
-    float emission[3], pad4; // 新增：自发光（光源识别）
-    float color[3], pad5;    // 物体颜色
+    float n0[3], pad3;
+    float n1[3], pad4;
+    float n2[3], pad5;
+    float normal[3], hasVPNormal;   // 新增：面法线
+    float emission[3], pad6; // 新增：自发光（光源识别）
+    float color[3], pad7;    // 物体颜色
+
+    float Ks[3], specularExponent;
 };
 
 struct BVHNodeGPU {

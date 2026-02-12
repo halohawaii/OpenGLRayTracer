@@ -7,7 +7,13 @@
 
 #include "Vector.hpp"
 
-enum MaterialType { DIFFUSE};
+enum MaterialType 
+{ 
+    DIFFUSE,
+    WOOD,
+    METAL,
+    MIRROR
+};
 
 class Material{
 private:
@@ -87,14 +93,14 @@ private:
 
 public:
     MaterialType m_type;
-    //Vector3f m_color;
+    Vector3f m_color;
     Vector3f m_emission;
     float ior;
     Vector3f Kd, Ks;
     float specularExponent;
     //Texture tex;
 
-    inline Material(MaterialType t=DIFFUSE, Vector3f e=Vector3f(0,0,0));
+    inline Material(MaterialType t=DIFFUSE, Vector3f e=Vector3f(0,0,0), Vector3f c = Vector3f(1.0f, 1.0f, 1.0f));
     inline MaterialType getType();
     //inline Vector3f getColor();
     inline Vector3f getColorAt(double u, double v);
@@ -110,10 +116,35 @@ public:
 
 };
 
-Material::Material(MaterialType t, Vector3f e){
+Material::Material(MaterialType t, Vector3f e, Vector3f c){
     m_type = t;
-    //m_color = c;
+    m_color = c;
     m_emission = e;
+    switch (m_type)
+    {
+    case DIFFUSE:
+        Kd = c * 0.7;
+        Ks = Vector3f(0.1f, 0.1f, 0.1f);
+        specularExponent = 15;
+        break;
+    case WOOD:
+        Kd = c * 0.5;
+        Ks = Vector3f(0.3f, 0.3f, 0.3f);
+        specularExponent = 75;
+        break;
+    case METAL:
+        Kd = c * 0.2;
+        Ks = Vector3f(0.8f, 0.8f, 0.8f);
+        specularExponent = 800;
+        break;
+    case MIRROR:
+        Kd = c * 0.05f;
+        Ks = Vector3f(1.0f, 1.0f, 1.0f);
+        specularExponent = 2000;
+        break;
+    default:
+        break;
+    }
 }
 
 MaterialType Material::getType(){return m_type;}

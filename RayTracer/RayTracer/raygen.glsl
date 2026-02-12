@@ -28,12 +28,18 @@ layout(std140, binding = 0) uniform Camera
 };
 
 struct Triangle {
-    vec3 v0;
-    vec3 v1;
-    vec3 v2;
+    vec3 v0; float _p0;
+    vec3 v1; float _p1;
+    vec3 v2; float _p2;
+    vec3 n0; float _p3;
+    vec3 n1; float _p4;
+    vec3 n2; float _p5;
     vec3 normal;
-    vec3 emission;
-    vec3 color;
+    float hasVPNormal;
+    vec3 emission; float _p6;
+    vec3 color;  float _p7;
+    vec3 Ks;
+    float specularExponent;
 };
 
 layout(std430, binding = 3) buffer MeshBuffer {
@@ -100,7 +106,7 @@ bool IntersectAABB(vec3 orig, vec3 invDir, vec3 pMin, vec3 pMax, float t_min, fl
     return tenter <= texit && texit >= t_min && tenter <= t_max;
 }
 
-bool intersectTriangle(vec3 orig, vec3 dir, vec3 v0, vec3 v1, vec3 v2, out float t) {
+bool intersectTriangle(vec3 orig, vec3 dir, vec3 v0, vec3 v1, vec3 v2, out float t, out float u, out float v) {
     vec3 e1 = v1 - v0;
     vec3 e2 = v2 - v0;
     vec3 pvec = cross(dir, e2);
@@ -111,11 +117,11 @@ bool intersectTriangle(vec3 orig, vec3 dir, vec3 v0, vec3 v1, vec3 v2, out float
     
     float invDet = 1.0 / det;
     vec3 tvec = orig - v0;
-    float u = dot(tvec, pvec) * invDet;
+    u = dot(tvec, pvec) * invDet;
     if (u < 0.0 || u > 1.0) return false;
     
     vec3 qvec = cross(tvec, e1);
-    float v = dot(dir, qvec) * invDet;
+    v = dot(dir, qvec) * invDet;
     if (v < 0.0 || u + v > 1.0) return false;
     
     t = dot(e2, qvec) * invDet;
@@ -123,10 +129,11 @@ bool intersectTriangle(vec3 orig, vec3 dir, vec3 v0, vec3 v1, vec3 v2, out float
 }
 
 
-bool intersectScene(vec3 orig, vec3 dir, out float minT, out int hitIdx) {
+bool intersectScene(vec3 orig, vec3 dir, out float minT, out int hitIdx, out float u_out, out float v_out) {
     minT = 1e30;
     hitIdx = -1;
-
+    u_out = 0.0;
+    v_out = 0.0;
 
     vec3 invDir = 1.0 / dir;
     int stack[16];
@@ -149,12 +156,14 @@ bool intersectScene(vec3 orig, vec3 dir, out float minT, out int hitIdx) {
 
             for (int i = 0; i < node.nPrimitives; i++) {
                 int triIndex = node.primitiveIdx + i;
-                float t;
+                float t, u, v;
                 
-                if (intersectTriangle(orig, dir, triangles[triIndex].v0, triangles[triIndex].v1, triangles[triIndex].v2, t)) {
+                if (intersectTriangle(orig, dir, triangles[triIndex].v0, triangles[triIndex].v1, triangles[triIndex].v2, t, u, v)) {
                     if (t < minT) {
                         minT = t;
                         hitIdx = triIndex;
+                        u_out = u;
+                        v_out = v;
                     }
                 }
             }
@@ -240,20 +249,52 @@ void sampleLight(out vec3 pos, out vec3 normal, out vec3 emit, out float pdf) {
     pdf = 1.0 / total_emit_area;
 }
 
+vec3 evalPhong(Triangle tri, vec3 viewDir, vec3 lightDir, vec3 N) {
+    float cosAlpha = max(0.0, dot(N, lightDir));
+    if (cosAlpha <= 0.0) return vec3(0.0);
+
+    // 1. 漫反射部分 (Lambertian)
+    vec3 diffuse = tri.color / 3.14159265;
+
+    // 2. 镜面反射部分 (Phong)
+    // viewDir 是从交点射向相机的方向
+    // lightDir 是从交点射向光源的方向
+    vec3 R = reflect(-lightDir, N); 
+    float cosBeta = max(0.0, dot(R, viewDir));
+    
+    // 能量守恒系数：(ns + 2) / 2pi
+    float normalization = (tri.specularExponent + 2.0) / (2.0 * 3.14159265);
+    vec3 specular = tri.Ks * normalization * pow(cosBeta, tri.specularExponent);
+
+    return (diffuse + specular);
+}
+
 vec3 Render(vec3 d) {
     vec3 L_out = vec3(0.0);
     vec3 throughput = vec3(1.0);
     vec3 currOrig = camPos;
     vec3 currDir = d;
 
-    for (int bounce = 0; bounce < 4; bounce++) {
-        float minT;
+    for (int bounce = 0; bounce < 10; bounce++) {
+        float minT, u, v;
         int hitIdx;
-        if (!intersectScene(currOrig, currDir, minT, hitIdx)) break;
+        if (!intersectScene(currOrig, currDir, minT, hitIdx, u, v)) break;
 
         Triangle hitTri = triangles[hitIdx];
         vec3 hitPoint = currOrig + currDir * minT;
-        vec3 N = normalize(hitTri.normal);
+
+        //lerp normal
+        vec3 N;
+        if (hitTri.hasVPNormal > 0.5) { //
+            float w = 1.0 - u - v;
+            // 顶点法线插值公式
+            N = normalize(hitTri.n0 * w + hitTri.n1 * u + hitTri.n2 * v);
+        } else {
+            N = normalize(hitTri.normal); // 回退到面法线
+        }
+
+
+        // vec3 N = normalize(hitTri.normal);
         if (dot(currDir, N) > 0.0) N = -N;
 
         // bounce to light source
@@ -273,12 +314,19 @@ vec3 Render(vec3 d) {
         int shadowIdx;
         
         // no block
-        if (intersectScene(hitPoint + N * 0.001, lightDir, shadowT, shadowIdx)) {
+        if (intersectScene(hitPoint + N * 0.001, lightDir, shadowT, shadowIdx, u, v)) {
             if (shadowIdx != -1 && abs(shadowT - lightDist) < 0.01) {
+                /*
                 vec3 f_r = hitTri.color / 3.14159265; 
                 float cosTheta = max(0.0, dot(N, lightDir));
                 float cosTheta1 = max(0.0, dot(l_normal, -lightDir));
                 L_out += (l_emit * f_r * cosTheta * cosTheta1 / (lightDist * lightDist) / pdf_light) * throughput;
+                */
+                vec3 viewDir = -d;
+                vec3 f_r = evalPhong(hitTri, viewDir, lightDir, N);
+                float cosTheta = max(0.0, dot(N, lightDir));
+                float cosTheta1 = max(0.0, dot(l_normal, -lightDir));
+                L_out += min(vec3(20.0), (l_emit * f_r * cosTheta * cosTheta1 / (lightDist * lightDist) / pdf_light) * throughput);
             }
         }
 
@@ -291,9 +339,10 @@ vec3 Render(vec3 d) {
 
         float nextT;
         int nextIdx;
-        if (intersectScene(hitPoint + N * 0.001, wi, nextT, nextIdx)) {
+        if (intersectScene(hitPoint + N * 0.001, wi, nextT, nextIdx, u, v)) {
             if (length(triangles[nextIdx].emission) < 0.1) {
-                vec3 f_r = hitTri.color / 3.14159265;
+                // vec3 f_r = hitTri.color / 3.14159265;
+                vec3 f_r = evalPhong(hitTri, -currDir, wi, N);
                 float cosTheta = max(0.0, dot(wi, N));
                 
                 throughput *= (f_r * cosTheta) / pdf_hemi / RR;

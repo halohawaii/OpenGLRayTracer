@@ -48,14 +48,23 @@ public:
     Vector3f normal;
     float area;
     Material* m;
+    bool isNeedNormalLerp = false;
+    Vector3f vn0, vn1, vn2;
 
-    Triangle(Vector3f _v0, Vector3f _v1, Vector3f _v2, Material* _m = nullptr)
+    Triangle(Vector3f _v0, Vector3f _v1, Vector3f _v2, Vector3f _vn0, Vector3f _vn1, Vector3f _vn2, Material* _m = nullptr, bool _needNormalLerp = false)
         : v0(_v0), v1(_v1), v2(_v2), m(_m)
     {
         e1 = v1 - v0;
         e2 = v2 - v0;
         normal = normalize(crossProduct(e1, e2));
         area = crossProduct(e1, e2).norm()*0.5f;
+        isNeedNormalLerp = _needNormalLerp;
+        if (isNeedNormalLerp)
+        {
+            vn0 = _vn0;
+            vn1 = _vn1;
+            vn2 = _vn2;
+        }
     }
 
     bool intersect(const Ray& ray) override;
@@ -107,7 +116,7 @@ public:
 class MeshTriangle : public Object
 {
 public:
-    MeshTriangle(const std::string& filename, Material *mt = new Material())
+    MeshTriangle(const std::string& filename, Material *mt = new Material(), bool needNormalLerp = false)
     {
         objl::Loader loader;
         loader.LoadFile(filename);
@@ -124,7 +133,7 @@ public:
                                      -std::numeric_limits<float>::infinity()};
         for (int i = 0; i < mesh.Vertices.size(); i += 3) {
             std::array<Vector3f, 3> face_vertices;
-
+            std::array<Vector3f, 3> vertexNormal;
             for (int j = 0; j < 3; j++) {
                 auto vert = Vector3f(mesh.Vertices[i + j].Position.X,
                                      mesh.Vertices[i + j].Position.Y,
@@ -137,10 +146,26 @@ public:
                 max_vert = Vector3f(std::max(max_vert.x, vert.x),
                                     std::max(max_vert.y, vert.y),
                                     std::max(max_vert.z, vert.z));
+
+                if (needNormalLerp)
+                {
+                    auto VN = Vector3f(
+                        mesh.Vertices[i + j].Normal.X,
+                        mesh.Vertices[i + j].Normal.Y,
+                        mesh.Vertices[i + j].Normal.Z
+                    );
+                    vertexNormal[j] = VN;
+                }
             }
 
-            triangles.emplace_back(face_vertices[0], face_vertices[1],
-                                   face_vertices[2], mt);
+            triangles.emplace_back(face_vertices[0], 
+                                   face_vertices[1],
+                                   face_vertices[2],
+                                   vertexNormal[0], 
+                                   vertexNormal[1], 
+                                   vertexNormal[2], 
+                                   mt, 
+                                   needNormalLerp);
         }
 
         bounding_box = Bounds3(min_vert, max_vert);
@@ -171,7 +196,12 @@ public:
             tg.color[0] = col.x; tg.color[1] = col.y; tg.color[2] = col.z;
             tg.normal[0] = tri.normal.x; tg.normal[1] = tri.normal.y; tg.normal[2] = tri.normal.z;
             tg.emission[0] = m->getEmission().x; tg.emission[1] = m->getEmission().y; tg.emission[2] = m->getEmission().z;
-
+            tg.Ks[0] = m->Ks.x; tg.Ks[1] = m->Ks.y; tg.Ks[2] = m->Ks.z;
+            tg.specularExponent = m->specularExponent;
+            tg.hasVPNormal = tri.isNeedNormalLerp;
+            tg.n0[0] = tri.vn0.x; tg.n0[1] = tri.vn0.y; tg.n0[2] = tri.vn0.z;
+            tg.n1[0] = tri.vn1.x; tg.n1[1] = tri.vn1.y; tg.n1[2] = tri.vn1.z;
+            tg.n2[0] = tri.vn2.x; tg.n2[1] = tri.vn2.y; tg.n2[2] = tri.vn2.z;
             out.push_back(tg);
         }
     }
