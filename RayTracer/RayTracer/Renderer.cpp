@@ -219,7 +219,7 @@ void Renderer::Render(const Scene& scene)
     glUniform1i(glGetUniformLocation(rayGenProgram, "u_lightCount"), (int)lightIndices.size());
 
     auto start = std::chrono::system_clock::now();
-    int spp = 512;
+    int spp = 1024;
     int currentFrame = 0;
     while (!glfwWindowShouldClose(window) && currentFrame < spp)
     {

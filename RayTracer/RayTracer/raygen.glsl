@@ -275,10 +275,40 @@ vec3 Render(vec3 d) {
     vec3 currOrig = camPos;
     vec3 currDir = d;
 
-    for (int bounce = 0; bounce < 10; bounce++) {
+    for (int bounce = 0; bounce < 20; bounce++) {
         float minT, u, v;
         int hitIdx;
-        if (!intersectScene(currOrig, currDir, minT, hitIdx, u, v)) break;
+        if (!intersectScene(currOrig, currDir, minT, hitIdx, u, v))
+        {
+            if (bounce == 0){
+                // vec3 skyColor = vec3(0.1, 0.2, 0.8);
+                // return skyColor;
+                vec3 finalColor;
+
+                // 定义地平线颜色（连接天空和地面的缝合线）
+                vec3 horizonColor = vec3(0.6); // 浅灰色，制造“雾霭”感
+
+                if (currDir.y > 0.0) {
+                    // --- 天空部分 ---
+                    // pow(..., 0.8) 是为了让蓝色集中在头顶，地平线保持较宽的亮色
+                    float t = pow(currDir.y, 0.3); 
+                    vec3 zenithColor = vec3(0.1, 0.2, 0.8); // 头顶深蓝
+                    finalColor = mix(horizonColor, zenithColor, t);
+                } 
+                else {
+                    // --- 地面部分（方案一对应逻辑）---
+                    // 使用 abs() 因为向下射时 y 是负数
+                    float t = pow(abs(currDir.y), 0.3); 
+                    vec3 groundColor = vec3(0.1, 0.2, 0.2) * 0.5; // 脚底深黑（无限深渊感）
+                    finalColor = mix(horizonColor, groundColor, t);
+                }
+
+                // 如果觉得背景太亮抢了主体风头，可以在这里整体乘一个系数
+                return finalColor;
+            }
+            
+            break;
+        } 
 
         Triangle hitTri = triangles[hitIdx];
         vec3 hitPoint = currOrig + currDir * minT;
@@ -334,26 +364,70 @@ vec3 Render(vec3 d) {
         float RR = 0.8;
         if (rand() > RR) break;
 
-        vec3 wi = sampleDiffuse(N);
-        float pdf_hemi = 1.0 / (2.0 * 3.14159265); // hemisphere sample
+        vec3 wi;
+        float pdf;
+        if (hitTri.specularExponent > 1000.0) {
+            // 镜面反射：wi 就是完美的反射向量
+            wi = reflect(currDir, N); 
+            pdf = 1.0; // 镜面反射是确定性的，PDF 设为 1
+        } else {
+            // 漫反射：继续用你原来的随机采样
+            wi = sampleDiffuse(N);
+            pdf = 1.0 / (2.0 * 3.14159265); 
+        }
+
+        vec3 f_r = evalPhong(hitTri, -currDir, wi, N);
+        float cosTheta = max(0.0, dot(wi, N)); 
+        if (hitTri.specularExponent > 1000.0) 
+        {
+            throughput *= hitTri.Ks / RR;
+        }
+        else 
+        {
+            throughput *= (f_r * cosTheta) / pdf / RR;
+        }
+
+        currOrig = hitPoint + N * 0.001;
+        currDir = wi;
+        // vec3 wi = sampleDiffuse(N);
+        // float pdf_hemi = 1.0 / (2.0 * 3.14159265); // hemisphere sample
+        // float pdf_hemi = dot(wi, N) / 3.14159265;
 
         float nextT;
         int nextIdx;
         if (intersectScene(hitPoint + N * 0.001, wi, nextT, nextIdx, u, v)) {
             if (length(triangles[nextIdx].emission) < 0.1) {
                 // vec3 f_r = hitTri.color / 3.14159265;
-                vec3 f_r = evalPhong(hitTri, -currDir, wi, N);
-                float cosTheta = max(0.0, dot(wi, N));
                 
-                throughput *= (f_r * cosTheta) / pdf_hemi / RR;
-                
-                currOrig = hitPoint + N * 0.001;
-                currDir = wi;
             } else {
+                L_out += triangles[nextIdx].emission * throughput;
                 break; // hit light
             }
         } else {
-            break;
+            // 射线弹跳后射向了天空
+            // float t_sky = 0.5 * (wi.y + 1.0);
+            // vec3 skyColor = mix(vec3(1.0), vec3(0.5, 0.7, 1.0), t_sky) * 0.5;
+            float t_sky = max(0.0, wi.y); // 只取上半球 [cite: 191]
+            // 使用 pow(t, 2.0) 让地平线处更亮，头顶蓝色更深邃
+            vec3 skyColorTop = vec3(0.1, 0.2, 0.8); // 调深蓝色
+            vec3 horizonColor = vec3(0.8);
+            vec3 finalSky = mix(horizonColor, skyColorTop, pow(t_sky, 0.7)) * 0.4; 
+
+            // 如果 wi.y < 0，说明射向了“地面以下”，给一个暗色，防止球底太白
+            if (wi.y < 0.0) 
+            {
+                float groundT = pow(abs(wi.y), 0.6); // 0.6 次方是为了拉开层次
+
+                // 从地平线的浅灰(0.3) 渐变到 脚底的深黑(0.02)
+                vec3 horizonGray = vec3(0.3); 
+                vec3 deepGround = vec3(0.02);
+
+                finalSky = mix(horizonGray, deepGround, groundT);
+            }
+
+            // 这行会让球面上映照出漂亮的蓝天
+            L_out += finalSky * throughput;
+            break; // 路径结束
         }
     }
     return L_out;
@@ -387,13 +461,14 @@ void main()
               * scale;
     vec3 dir = normalize(vec3(-x, y, 1.0));
     vec3 currentSample = Render(dir);
+    vec3 finalColor = pow(currentSample, vec3(1.0 / 2.2));
     if (frameCount == 0) {
-        imageStore(outImage, ivec2(i, j), vec4(currentSample, 1.0));
+        imageStore(outImage, ivec2(i, j), vec4(finalColor, 1.0));
     } else {
         vec4 lastColor = imageLoad(outImage, ivec2(i, j));
         // oldCOlor * (n/(n+1)) + NewColor * (1/(n+1))
         float weight = 1.0 / float(frameCount + 1);
-        vec3 accumulated = mix(lastColor.rgb, currentSample, weight);
+        vec3 accumulated = mix(lastColor.rgb, finalColor, weight);
         imageStore(outImage, ivec2(i, j), vec4(accumulated, 1.0));
     }
     
