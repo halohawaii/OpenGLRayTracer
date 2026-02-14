@@ -15,7 +15,7 @@ int main(int argc, char** argv)
 {
 
     // Change the definition here to change resolution
-    Scene scene(784, 784);
+    Scene scene(2560, 1440);
 
     Material* redWood = new Material(WOOD, Vector3f(0.0f), Vector3f(1.0f, 0.0f, 0.0f));
     //red->Kd = Vector3f(0.63f, 0.065f, 0.05f);
@@ -30,19 +30,19 @@ int main(int argc, char** argv)
     light->Kd = Vector3f(0.65f);
 
     std::string rootPath = "D:/711/OpenGLRayTracer/RayTracer/RayTracer/";
-    MeshTriangle floor(rootPath + "models/cornellbox/floor.obj", whiteWood);
+    MeshTriangle floor(rootPath + "models/cornellbox/floor2.obj", redWood);
     MeshTriangle ball1(rootPath + "models/cornellbox/ball1.obj", whiteMirror, true);
     MeshTriangle ball2(rootPath + "models/cornellbox/ball2.obj", whiteMirror, true);
     MeshTriangle left(rootPath + "models/cornellbox/left.obj", redWood);
     MeshTriangle right(rootPath + "models/cornellbox/right.obj", greenPlastic);
     MeshTriangle shortbox(rootPath + "models/cornellbox/shortbox.obj", whiteMirror);
-    MeshTriangle light_(rootPath + "models/cornellbox/light.obj", light);
+    MeshTriangle light_(rootPath + "models/cornellbox/light2.obj", light);
 
     scene.Add(&floor);
     scene.Add(&ball1);
     scene.Add(&ball2);
-    scene.Add(&left);
-    scene.Add(&right);
+    //scene.Add(&left);
+    //scene.Add(&right);
     scene.Add(&shortbox);
     scene.Add(&light_);
 

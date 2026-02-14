@@ -238,7 +238,7 @@ void Renderer::Render(const Scene& scene)
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
 
         glBlitFramebuffer(0, 0, scene.width, scene.height,
-            0, scene.width, scene.height, 0,
+            0, scene.height, scene.width, 0,
             GL_COLOR_BUFFER_BIT, GL_NEAREST);
 
 

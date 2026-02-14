@@ -344,7 +344,7 @@ vec3 Render(vec3 d) {
         int shadowIdx;
         
         // no block
-        if (intersectScene(hitPoint + N * 0.001, lightDir, shadowT, shadowIdx, u, v)) {
+        if (intersectScene(hitPoint + N * 1e-4, lightDir, shadowT, shadowIdx, u, v)) {
             if (shadowIdx != -1 && abs(shadowT - lightDist) < 0.01) {
                 /*
                 vec3 f_r = hitTri.color / 3.14159265; 
@@ -387,7 +387,7 @@ vec3 Render(vec3 d) {
             throughput *= (f_r * cosTheta) / pdf / RR;
         }
 
-        currOrig = hitPoint + N * 0.001;
+        currOrig = hitPoint + N * 1e-4;
         currDir = wi;
         // vec3 wi = sampleDiffuse(N);
         // float pdf_hemi = 1.0 / (2.0 * 3.14159265); // hemisphere sample
@@ -395,7 +395,7 @@ vec3 Render(vec3 d) {
 
         float nextT;
         int nextIdx;
-        if (intersectScene(hitPoint + N * 0.001, wi, nextT, nextIdx, u, v)) {
+        if (intersectScene(hitPoint + N * 1e-4, wi, nextT, nextIdx, u, v)) {
             if (length(triangles[nextIdx].emission) < 0.1) {
                 // vec3 f_r = hitTri.color / 3.14159265;
                 
@@ -455,9 +455,9 @@ void main()
     seed = uint(i * 1973 + j * 9277 + frameCount * 26699) | 1u;
     float aspect = float(imageWidth) / float(imageHeight);
     float scale = tan(radians(fov * 0.5));
-    float x = (2.0 * (float(i) + 0.5) / float(imageWidth) - 1.0)
+    float x = (2.0 * (float(i) + rand()) / float(imageWidth) - 1.0)
               * aspect * scale;
-    float y = (1.0 - 2.0 * (float(j) + 0.5) / float(imageHeight))
+    float y = (1.0 - 2.0 * (float(j) + rand()) / float(imageHeight))
               * scale;
     vec3 dir = normalize(vec3(-x, y, 1.0));
     vec3 currentSample = Render(dir);
