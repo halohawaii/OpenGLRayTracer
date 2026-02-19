@@ -455,12 +455,17 @@ void main()
     seed = uint(i * 1973 + j * 9277 + frameCount * 26699) | 1u;
     float aspect = float(imageWidth) / float(imageHeight);
     float scale = tan(radians(fov * 0.5));
-    float x = (2.0 * (float(i) + rand()) / float(imageWidth) - 1.0)
-              * aspect * scale;
-    float y = (1.0 - 2.0 * (float(j) + rand()) / float(imageHeight))
-              * scale;
-    vec3 dir = normalize(vec3(-x, y, 1.0));
-    vec3 currentSample = Render(dir);
+
+    vec3 currentSample = vec3(0);
+    for (int k = 0; k < 4; k++){
+        float x = (2.0 * (float(i) + mod(k, 2) / 2 + 0.25) / float(imageWidth) - 1.0)
+                  * aspect * scale;
+        float y = (1.0 - 2.0 * (float(j) + (k / 2) / 2.0 + 0.25) / float(imageHeight))
+                  * scale;
+        vec3 dir = normalize(vec3(-x, y, 1.0));
+        currentSample += Render(dir);
+    }
+    currentSample /= 4;
     vec3 finalColor = pow(currentSample, vec3(1.0 / 2.2));
     if (frameCount == 0) {
         imageStore(outImage, ivec2(i, j), vec4(finalColor, 1.0));
