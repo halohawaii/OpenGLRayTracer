@@ -345,7 +345,7 @@ vec3 Render(vec3 d) {
         
         // no block
         if (intersectScene(hitPoint + N * 1e-4, lightDir, shadowT, shadowIdx, u, v)) {
-            if (shadowIdx != -1 && abs(shadowT - lightDist) < 0.01) {
+            if (shadowIdx != -1 && abs(shadowT - lightDist) < 0.01 && u_lightCount > 0 && pdf_light > 0.0) {
                 /*
                 vec3 f_r = hitTri.color / 3.14159265; 
                 float cosTheta = max(0.0, dot(N, lightDir));
