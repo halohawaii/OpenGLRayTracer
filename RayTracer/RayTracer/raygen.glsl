@@ -249,22 +249,22 @@ void sampleLight(out vec3 pos, out vec3 normal, out vec3 emit, out float pdf) {
     pdf = 1.0 / total_emit_area;
 }
 
-vec3 evalPhong(Triangle tri, vec3 viewDir, vec3 lightDir, vec3 N) {
+vec3 evalBlinnPhong(Triangle tri, vec3 viewDir, vec3 lightDir, vec3 N) {
     float cosAlpha = max(0.0, dot(N, lightDir));
     if (cosAlpha <= 0.0) return vec3(0.0);
 
     // 1. 漫反射部分 (Lambertian)
     vec3 diffuse = tri.color / 3.14159265;
 
-    // 2. 镜面反射部分 (Phong)
-    // viewDir 是从交点射向相机的方向
-    // lightDir 是从交点射向光源的方向
-    vec3 R = reflect(-lightDir, N); 
-    float cosBeta = max(0.0, dot(R, viewDir));
+    // 2. 镜面反射部分 (Blinn-Phong)
+    // 计算半程向量 H
+    vec3 H = normalize(viewDir + lightDir); 
+    float cosN = max(0.0, dot(N, H));
     
-    // 能量守恒系数：(ns + 2) / 2pi
-    float normalization = (tri.specularExponent + 2.0) / (2.0 * 3.14159265);
-    vec3 specular = tri.Ks * normalization * pow(cosBeta, tri.specularExponent);
+    // Blinn-Phong 的指数通常需要比 Phong 更大才能得到相同大小的高光
+    // 能量守恒系数：(ns + 8) / 8pi
+    float normalization = (tri.specularExponent + 8.0) / (8.0 * 3.14159265);
+    vec3 specular = tri.Ks * normalization * pow(cosN, tri.specularExponent);
 
     return (diffuse + specular);
 }
@@ -353,7 +353,7 @@ vec3 Render(vec3 d) {
                 L_out += (l_emit * f_r * cosTheta * cosTheta1 / (lightDist * lightDist) / pdf_light) * throughput;
                 */
                 vec3 viewDir = -d;
-                vec3 f_r = evalPhong(hitTri, viewDir, lightDir, N);
+                vec3 f_r = evalBlinnPhong(hitTri, viewDir, lightDir, N);
                 float cosTheta = max(0.0, dot(N, lightDir));
                 float cosTheta1 = max(0.0, dot(l_normal, -lightDir));
                 L_out += min(vec3(20.0), (l_emit * f_r * cosTheta * cosTheta1 / (lightDist * lightDist) / pdf_light) * throughput);
@@ -376,7 +376,7 @@ vec3 Render(vec3 d) {
             pdf = 1.0 / (2.0 * 3.14159265); 
         }
 
-        vec3 f_r = evalPhong(hitTri, -currDir, wi, N);
+        vec3 f_r = evalBlinnPhong(hitTri, -currDir, wi, N);
         float cosTheta = max(0.0, dot(wi, N)); 
         if (hitTri.specularExponent > 1000.0) 
         {
