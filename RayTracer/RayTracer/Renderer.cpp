@@ -13,12 +13,136 @@
 #include <sstream>
 #include <chrono>
 #include "BVHConstructor.hpp"
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
 
 inline float deg2rad(const float& deg) { return deg * M_PI / 180.0; }
 
 const float EPSILON = 0.001;
 
+static float cameraYaw = 0.0f;
+static float cameraPitch = 0.0f;
+
 std::mutex mtx;
+
+GLuint loadTexture(const char* path) {
+    int width, height, nrChannels;
+    unsigned char* data = stbi_load(path, &width, &height, &nrChannels, 0);
+
+    GLuint textureID;
+    glGenTextures(1, &textureID);
+    glBindTexture(GL_TEXTURE_2D, textureID);
+
+    // 设置纹理参数
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+    // 上传数据
+    GLenum format = (nrChannels == 4) ? GL_RGBA : GL_RGB;
+    glTexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, format, GL_UNSIGNED_BYTE, data);
+    glGenerateMipmap(GL_TEXTURE_2D);
+
+    stbi_image_free(data);
+    return textureID;
+}
+
+void processInput(GLFWwindow* window, CameraGPU& cam, int& frameCount, bool& isExit) {
+    float moveSpeed = 5.0f;
+    float rotateSpeed = 0.5f;
+    bool moved = false;
+
+    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) {
+        cam.pos[0] += cam.right[0] * moveSpeed;
+        cam.pos[1] += cam.right[1] * moveSpeed;
+        cam.pos[2] += cam.right[2] * moveSpeed;
+        moved = true;
+    }
+    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) {
+        cam.pos[0] -= cam.right[0] * moveSpeed;
+        cam.pos[1] -= cam.right[1] * moveSpeed;
+        cam.pos[2] -= cam.right[2] * moveSpeed;
+        moved = true;
+    }
+    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) {
+        cam.pos[0] -= cam.forward[0] * moveSpeed;
+        cam.pos[1] -= cam.forward[1] * moveSpeed;
+        cam.pos[2] -= cam.forward[2] * moveSpeed;
+        moved = true;
+    }
+    if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) {
+        cam.pos[0] += cam.forward[0] * moveSpeed;
+        cam.pos[1] += cam.forward[1] * moveSpeed;
+        cam.pos[2] += cam.forward[2] * moveSpeed;
+        moved = true;
+    }
+    if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) {
+        cam.pos[0] += cam.up[0] * moveSpeed;
+        cam.pos[1] += cam.up[1] * moveSpeed;
+        cam.pos[2] += cam.up[2] * moveSpeed;
+        moved = true;
+    }
+    if (glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS) {
+        cam.pos[0] += -cam.up[0] * moveSpeed;
+        cam.pos[1] += -cam.up[1] * moveSpeed;
+        cam.pos[2] += -cam.up[2] * moveSpeed;
+        moved = true;
+    }
+    if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS) {
+        cameraYaw += rotateSpeed * M_PI / 180.0;
+        moved = true;
+    }
+    if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS) {
+        cameraYaw -= rotateSpeed * M_PI / 180.0;
+        moved = true;
+    }
+    if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS) {
+        cameraPitch += rotateSpeed * M_PI / 180.0;
+        if (cameraPitch > 1.55f) cameraPitch = 1.55f;
+        moved = true;
+    }
+    if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS) {
+        cameraPitch -= rotateSpeed * M_PI / 180.0;
+        if (cameraPitch < -1.55f) cameraPitch = -1.55f;
+        moved = true;
+    }
+    if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
+        isExit = true;
+    }
+
+
+    if (moved) {
+        frameCount = 0;
+
+        float cp = cos(cameraPitch);
+        float sp = sin(cameraPitch);
+        float cy = cos(cameraYaw);
+        float sy = sin(cameraYaw);
+
+        cam.forward[0] = sy * cp;
+        cam.forward[1] = sp;
+        cam.forward[2] = cy * cp;
+
+        // right = normalize(cross(worldUp, forward))
+        float worldUpX = 0.0f, worldUpY = 1.0f, worldUpZ = 0.0f;
+        cam.right[0] = worldUpY * cam.forward[2] - worldUpZ * cam.forward[1];
+        cam.right[1] = worldUpZ * cam.forward[0] - worldUpX * cam.forward[2];
+        cam.right[2] = worldUpX * cam.forward[1] - worldUpY * cam.forward[0];
+
+        float rightMag = sqrt(cam.right[0] * cam.right[0] + cam.right[1] * cam.right[1] + cam.right[2] * cam.right[2]);
+        if (rightMag > 1e-6f) {
+            cam.right[0] /= rightMag;
+            cam.right[1] /= rightMag;
+            cam.right[2] /= rightMag;
+        }
+
+        // up = normalize(cross(forward, right))
+        cam.up[0] = cam.forward[1] * cam.right[2] - cam.forward[2] * cam.right[1];
+        cam.up[1] = cam.forward[2] * cam.right[0] - cam.forward[0] * cam.right[2];
+        cam.up[2] = cam.forward[0] * cam.right[1] - cam.forward[1] * cam.right[0];
+    }
+}
 
 // ================= Shader Compiling =================
 GLuint CompileComputeShader(const char* source)
@@ -93,13 +217,15 @@ void Renderer::Render(const Scene& scene)
     cam.forward[1] = 0;
     cam.forward[2] = 1;
 
-    cam.right[0] = -1;
+    cam.right[0] = 1;
     cam.right[1] = 0;
     cam.right[2] = 0;
 
     cam.up[0] = 0;
     cam.up[1] = 1;
     cam.up[2] = 0;
+
+    cam.SuperSample = 0; //SS
 
     std::vector<Vector3f> framebuffer(scene.width * scene.height);
 
@@ -158,6 +284,14 @@ void Renderer::Render(const Scene& scene)
 
     glBindImageTexture(2, outputTexture, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA32F);
 
+    GLuint causticTexture;
+    glGenTextures(1, &causticTexture);
+    glBindTexture(GL_TEXTURE_2D, causticTexture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA32F, scene.width, scene.height);
+    glBindImageTexture(7, causticTexture, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA32F);
+
     std::vector<TriangleGPU> triList = AssembleAllTriangles(scene);
 
     /*std::vector<BVHNodeGPU> bvhNodes;
@@ -205,6 +339,10 @@ void Renderer::Render(const Scene& scene)
     glBufferData(GL_SHADER_STORAGE_BUFFER, lightIndices.size() * sizeof(int), lightIndices.data(), GL_STATIC_DRAW);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 5, lightSSBO);
 
+    // Textures
+    GLuint floorTex = loadTexture("D:/711/OpenGLRayTracer/RayTracer/RayTracer/textures/T_Floor2_D.png");
+
+
     // ---------- Read Compute Shader ----------
     std::string csSource = LoadTextFile("raygen.glsl");
     if (csSource.empty())
@@ -214,25 +352,63 @@ void Renderer::Render(const Scene& scene)
 
     glUseProgram(rayGenProgram);
     GLint frameCountLoc = glGetUniformLocation(rayGenProgram, "frameCount");
+    GLint passModeLoc = glGetUniformLocation(rayGenProgram, "u_passMode");
     glUniform1i(glGetUniformLocation(rayGenProgram, "imageWidth"), scene.width);
     glUniform1i(glGetUniformLocation(rayGenProgram, "imageHeight"), scene.height);
     glUniform1i(glGetUniformLocation(rayGenProgram, "u_lightCount"), (int)lightIndices.size());
+    glUniform1f(glGetUniformLocation(rayGenProgram, "u_causticStrength"), 4.0f);
 
     auto start = std::chrono::system_clock::now();
     int spp = 1024;
     int currentFrame = 0;
-    while (!glfwWindowShouldClose(window) && currentFrame < spp)
+    bool esc = false;
+    while (!glfwWindowShouldClose(window))
     {
-        glUniform1i(frameCountLoc, currentFrame);
+        glfwPollEvents();
+        processInput(window, cam, currentFrame, esc);
+        if (esc)
+        {
+            break;
+        }
 
-        glDispatchCompute(
-            (scene.width + 7) / 8,
-            (scene.height + 7) / 8,
-            1
-        );
+        if (currentFrame < spp)
+        {
+            if (currentFrame == 0) {
+                glBindBuffer(GL_UNIFORM_BUFFER, cameraUBO);
+                glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(CameraGPU), &cam);
+            }
 
-        glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+            glUniform1i(frameCountLoc, currentFrame);
 
+            glActiveTexture(GL_TEXTURE6);
+            glBindTexture(GL_TEXTURE_2D, floorTex);
+
+            glUniform1i(glGetUniformLocation(rayGenProgram, "u_Texture"), 6);
+
+            glUniform1i(passModeLoc, 1);
+            glDispatchCompute(
+                (scene.width + 7) / 8,
+                (scene.height + 7) / 8,
+                1
+            );
+            glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT);
+
+            glUniform1i(passModeLoc, 0);
+            glDispatchCompute(
+                (scene.width + 7) / 8,
+                (scene.height + 7) / 8,
+                1
+            );
+
+            glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+
+
+            currentFrame++;
+
+            if (currentFrame % 10 == 0) {
+                std::cout << "Progress: " << currentFrame << "/" << spp << " SPP" << std::endl;
+            }
+        }
 
         glBindFramebuffer(GL_READ_FRAMEBUFFER, srcFBO);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
@@ -243,13 +419,6 @@ void Renderer::Render(const Scene& scene)
 
 
         glfwSwapBuffers(window);
-        glfwPollEvents();
-
-        currentFrame++;
-
-        if (currentFrame % 10 == 0) {
-            std::cout << "Progress: " << currentFrame << "/" << spp << " SPP" << std::endl;
-        }
     }
     auto stop = std::chrono::system_clock::now();
     std::cout << "Render Time: " << std::chrono::duration_cast<std::chrono::milliseconds>(stop - start).count() << "milliseconds\n\n";
@@ -364,17 +533,17 @@ void Renderer::Render(const Scene& scene)
     }
     fclose(fp);
 
-    while (!glfwWindowShouldClose(window))
-    {
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, srcFBO);
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-        glBlitFramebuffer(0, 0, scene.width, scene.height,
-            0, scene.height, scene.width, 0,
-            GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    //while (!glfwWindowShouldClose(window))
+    //{
+    //    glBindFramebuffer(GL_READ_FRAMEBUFFER, srcFBO);
+    //    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    //    glBlitFramebuffer(0, 0, scene.width, scene.height,
+    //        0, scene.height, scene.width, 0,
+    //        GL_COLOR_BUFFER_BIT, GL_NEAREST);
 
-        glfwSwapBuffers(window);
-        glfwPollEvents();
-    }
+    //    glfwSwapBuffers(window);
+    //    glfwPollEvents();
+    //}
 }
 
 

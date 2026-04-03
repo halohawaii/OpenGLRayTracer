@@ -145,6 +145,7 @@
     <ClInclude Include="Renderer.hpp" />
     <ClInclude Include="Scene.hpp" />
     <ClInclude Include="Sphere.hpp" />
+    <ClInclude Include="stb_image.h" />
     <ClInclude Include="Triangle.hpp" />
     <ClInclude Include="Vector.hpp" />
   </ItemGroup>

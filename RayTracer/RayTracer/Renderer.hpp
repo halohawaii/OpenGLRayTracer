@@ -32,7 +32,7 @@ struct CameraGPU
     float pos[3];
     float fov;
     float forward[3];
-    float _pad0;
+    float SuperSample;
     float right[3];
     float _pad1;
     float up[3];

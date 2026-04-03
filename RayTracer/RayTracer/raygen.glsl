@@ -21,22 +21,22 @@ layout(std140, binding = 0) uniform Camera
     vec3 camPos;
     float fov;
     vec3 camForward;
-    float _pad0;
+    float SuperSample;
     vec3 camRight;
     float _pad1;
     vec3 camUp;
 };
 
 struct Triangle {
-    vec3 v0; float _p0;
-    vec3 v1; float _p1;
-    vec3 v2; float _p2;
-    vec3 n0; float _p3;
-    vec3 n1; float _p4;
-    vec3 n2; float _p5;
+    vec3 v0; float uv0U;
+    vec3 v1; float uv0V;
+    vec3 v2; float uv1U;
+    vec3 n0; float uv1V;
+    vec3 n1; float uv2U;
+    vec3 n2; float uv2V;
     vec3 normal;
     float hasVPNormal;
-    vec3 emission; float _p6;
+    vec3 emission; float texID;
     vec3 color;  float _p7;
     vec3 Ks;
     float specularExponent;
@@ -68,12 +68,17 @@ layout(std430, binding = 5) buffer LightIndexBuffer {
     int lightIndices[]; // light triangles
 };
 
+layout(binding = 6) uniform sampler2D u_Texture;
+
 uniform int imageWidth;
 uniform int imageHeight;
 uniform int frameCount;
 uniform int u_lightCount;
+uniform int u_passMode;          // 0: render pass, 1: photon pass
+uniform float u_causticStrength; // caustic map intensity scale
 
 layout(rgba32f, binding = 2) uniform image2D outImage;
+layout(rgba32f, binding = 7) uniform image2D causticImage;
 
 
 uint seed;
@@ -206,6 +211,40 @@ vec3 sampleDiffuse(vec3 N) {
     return normalize(tangent * localRay.x + bitangent * localRay.y + N * localRay.z);
 }
 
+vec3 sampleCosineHemisphere(vec3 N) {
+    float r1 = rand();
+    float r2 = rand();
+    float phi = 2.0 * 3.14159265 * r1;
+    float r = sqrt(r2);
+    float x = r * cos(phi);
+    float y = r * sin(phi);
+    float z = sqrt(max(0.0, 1.0 - r2));
+
+    vec3 up = abs(N.z) < 0.999 ? vec3(0, 0, 1) : vec3(1, 0, 0);
+    vec3 tangent = normalize(cross(up, N));
+    vec3 bitangent = cross(N, tangent);
+    return normalize(tangent * x + bitangent * y + N * z);
+}
+
+bool worldToPixel(vec3 P, out ivec2 pix, out float viewZ) {
+    vec3 rel = P - camPos;
+    float z = dot(rel, camForward);
+    viewZ = z;
+    if (z <= 1e-4) return false;
+
+    float aspect = float(imageWidth) / float(imageHeight);
+    float scale = tan(radians(fov * 0.5));
+    float x = -dot(rel, camRight) / (z * aspect * scale);
+    float y =  dot(rel, camUp)    / (z * scale);
+
+    if (abs(x) > 1.0 || abs(y) > 1.0) return false;
+    int px = int((x * 0.5 + 0.5) * float(imageWidth));
+    int py = int((0.5 - y * 0.5) * float(imageHeight));
+    if (px < 0 || py < 0 || px >= imageWidth || py >= imageHeight) return false;
+    pix = ivec2(px, py);
+    return true;
+}
+
 void sampleLight(out vec3 pos, out vec3 normal, out vec3 emit, out float pdf) {
 
     if (u_lightCount <= 0 || lightIndices[0] == -1) {
@@ -249,24 +288,111 @@ void sampleLight(out vec3 pos, out vec3 normal, out vec3 emit, out float pdf) {
     pdf = 1.0 / total_emit_area;
 }
 
-vec3 evalBlinnPhong(Triangle tri, vec3 viewDir, vec3 lightDir, vec3 N) {
+vec3 evalBlinnPhong(Triangle tri, vec3 viewDir, vec3 lightDir, vec3 N, vec2 UV) {
     float cosAlpha = max(0.0, dot(N, lightDir));
     if (cosAlpha <= 0.0) return vec3(0.0);
 
-    // 1. 漫反射部分 (Lambertian)
-    vec3 diffuse = tri.color / 3.14159265;
+    vec3 diffuse;
+    if (tri.texID < 0){ // no texture
+        diffuse = tri.color / 3.14159265;
+    }
+    else {
+        // float w = 1.0 - u - v;
+        // vec2 uv0 = vec2(tri.uv0U, tri.uv0V);
+        // vec2 uv1 = vec2(tri.uv1U, tri.uv1V);
+        // vec2 uv2 = vec2(tri.uv2U, tri.uv2V);
+        // vec2 hitUV = vec2(w * uv0 + u * uv1 + v * uv2);
+        // diffuse = vec3(hitUV.r, hitUV.g, 0.0);
+        diffuse = texture(u_Texture, UV).rgb / 3.14159265;
+    }
+    
 
-    // 2. 镜面反射部分 (Blinn-Phong)
-    // 计算半程向量 H
     vec3 H = normalize(viewDir + lightDir); 
     float cosN = max(0.0, dot(N, H));
     
-    // Blinn-Phong 的指数通常需要比 Phong 更大才能得到相同大小的高光
-    // 能量守恒系数：(ns + 8) / 8pi
     float normalization = (tri.specularExponent + 8.0) / (8.0 * 3.14159265);
     vec3 specular = tri.Ks * normalization * pow(cosN, tri.specularExponent);
 
     return (diffuse + specular);
+}
+
+float fresnel(vec3 I, vec3 N, float ior) {
+    float cosi = clamp(dot(I, N), -1.0, 1.0);
+    float etai = 1.0, etat = ior;
+    if (cosi > 0.0) { float temp = etai; etai = etat; etat = temp; }
+    
+    float sint = etai / etat * sqrt(max(0.0, 1.0 - cosi * cosi));
+    if (sint >= 1.0) return 1.0;
+
+    float r0 = (etai - etat) / (etai + etat);
+    r0 = r0 * r0;
+    return r0 + (1.0 - r0) * pow(1.0 - abs(cosi), 5.0);
+}
+
+void photonPass(ivec2 launchPix) {
+    if (frameCount == 0) {
+        imageStore(causticImage, launchPix, vec4(0.0));
+    }
+
+    const int PHOTONS_PER_PIXEL = 4;
+    for (int p = 0; p < PHOTONS_PER_PIXEL; ++p) {
+        vec3 l_pos, l_normal, l_emit;
+        float pdf_light;
+        sampleLight(l_pos, l_normal, l_emit, pdf_light);
+        if (pdf_light <= 0.0) continue;
+
+        vec3 photonOrig = l_pos + l_normal * 1e-3;
+        vec3 photonDir = sampleCosineHemisphere(l_normal);
+        float photonCount = float(imageWidth * imageHeight * PHOTONS_PER_PIXEL);
+        vec3 flux = l_emit / max(pdf_light * photonCount, 1e-5);
+
+        bool passedDielectric = false;
+        vec3 causticTint = vec3(1.0);
+        for (int bounce = 0; bounce < 12; bounce++) {
+            float t, u, v;
+            int hitIdx;
+            if (!intersectScene(photonOrig, photonDir, t, hitIdx, u, v)) break;
+
+            Triangle hitTri = triangles[hitIdx];
+            vec3 hitPoint = photonOrig + photonDir * t;
+            vec3 N = normalize(hitTri.normal);
+            if (dot(photonDir, N) > 0.0) N = -N;
+
+            if (length(hitTri.emission) > 0.1) break;
+
+            if (hitTri.texID > 0.5) {
+                passedDielectric = true;
+                causticTint *= clamp(hitTri.color, vec3(0.0), vec3(1.0));
+                vec3 sigma = max(vec3(0.0), 1.0 - clamp(hitTri.color, vec3(0.0), vec3(1.0)));
+                float tintDensity = 0.01;
+                causticTint *= exp(-sigma * tintDensity * t);
+
+                float ior = 2.417;
+                float kr = fresnel(photonDir, N, ior);
+                if (rand() < kr) {
+                    photonDir = reflect(photonDir, N);
+                } else {
+                    float eta = (dot(photonDir, N) < 0.0) ? (1.0 / ior) : ior;
+                    vec3 wt = refract(photonDir, N, eta);
+                    photonDir = (length(wt) < 0.01) ? reflect(photonDir, N) : wt;
+                }
+                photonOrig = hitPoint + photonDir * 1e-3;
+                continue;
+            }
+
+            if (passedDielectric) {
+                ivec2 splatPix;
+                float viewZ;
+                if (worldToPixel(hitPoint, splatPix, viewZ)) {
+                    float refDepth = 800.0;
+                    float perspectiveComp = clamp((refDepth * refDepth) / max(viewZ * viewZ, 1e-3), 0.25, 64.0);
+                    vec4 oldV = imageLoad(causticImage, splatPix);
+                    imageStore(causticImage, splatPix, vec4(oldV.rgb + flux * causticTint * perspectiveComp, 1.0));
+                }
+            }
+            break;
+        }
+    }
 }
 
 vec3 Render(vec3 d) {
@@ -278,85 +404,155 @@ vec3 Render(vec3 d) {
     for (int bounce = 0; bounce < 20; bounce++) {
         float minT, u, v;
         int hitIdx;
+
         if (!intersectScene(currOrig, currDir, minT, hitIdx, u, v))
         {
-            if (bounce == 0){
-                // vec3 skyColor = vec3(0.1, 0.2, 0.8);
-                // return skyColor;
-                vec3 finalColor;
+            vec3 finalColor;
+            vec3 horizonColor = vec3(0.6); 
 
-                // 定义地平线颜色（连接天空和地面的缝合线）
-                vec3 horizonColor = vec3(0.6); // 浅灰色，制造“雾霭”感
-
-                if (currDir.y > 0.0) {
-                    // --- 天空部分 ---
-                    // pow(..., 0.8) 是为了让蓝色集中在头顶，地平线保持较宽的亮色
-                    float t = pow(currDir.y, 0.3); 
-                    vec3 zenithColor = vec3(0.1, 0.2, 0.8); // 头顶深蓝
-                    finalColor = mix(horizonColor, zenithColor, t);
-                } 
-                else {
-                    // --- 地面部分（方案一对应逻辑）---
-                    // 使用 abs() 因为向下射时 y 是负数
-                    float t = pow(abs(currDir.y), 0.3); 
-                    vec3 groundColor = vec3(0.1, 0.2, 0.2) * 0.5; // 脚底深黑（无限深渊感）
-                    finalColor = mix(horizonColor, groundColor, t);
-                }
-
-                // 如果觉得背景太亮抢了主体风头，可以在这里整体乘一个系数
-                return finalColor;
+            if (currDir.y > 0.0) {
+                float t = pow(currDir.y, 0.3); 
+                vec3 zenithColor = vec3(0.1, 0.2, 0.8);
+                finalColor = mix(horizonColor, zenithColor, t);
+            } 
+            else {
+                float t = pow(abs(currDir.y), 0.3); 
+                vec3 groundColor = vec3(0.1, 0.2, 0.2) * 0.5;
+                finalColor = mix(horizonColor, groundColor, t);
             }
-            
-            break;
-        } 
+
+            // --- 核心修改 ---
+            // 无论 bounce 是多少，都要把天空色乘上当前的能量权重(throughput)并加到输出里
+            L_out += finalColor * throughput;
+            break; // 这条路径结束了，退出 for 循环
+        }
 
         Triangle hitTri = triangles[hitIdx];
         vec3 hitPoint = currOrig + currDir * minT;
+        vec3 hitColor = hitTri.color * 20;
 
         //lerp normal
         vec3 N;
         if (hitTri.hasVPNormal > 0.5) { //
             float w = 1.0 - u - v;
-            // 顶点法线插值公式
             N = normalize(hitTri.n0 * w + hitTri.n1 * u + hitTri.n2 * v);
         } else {
-            N = normalize(hitTri.normal); // 回退到面法线
+            N = normalize(hitTri.normal);
         }
 
-
         // vec3 N = normalize(hitTri.normal);
-        if (dot(currDir, N) > 0.0) N = -N;
+        // if (dot(currDir, N) > 0.0) N = -N;
+        bool into = dot(currDir, N) < 0.0;
+        vec3 nl = into ? N : -N;
 
-        // bounce to light source
+        if (!into && hitTri.texID > 0.5) {
+
+            // 计算吸收系数。你可以直接用 1.0 - hitTri.color 来定义吸收率
+            // 颜色越深，sigma 越大
+            vec3 sigma = 1.0 - hitColor; 
+            float density = 0.1; // 控制玻璃颜色的浓度
+            
+            // 比尔定律公式
+            throughput.r *= exp(-sigma.r * density * minT);
+            throughput.g *= exp(-sigma.g * density * minT);
+            throughput.b *= exp(-sigma.b * density * minT);
+
+        }
+
+        
+
+        vec2 UV;
+        float w = 1.0 - u - v;
+        vec2 uv0 = vec2(hitTri.uv0U, hitTri.uv0V);
+        vec2 uv1 = vec2(hitTri.uv1U, hitTri.uv1V);
+        vec2 uv2 = vec2(hitTri.uv2U, hitTri.uv2V);
+        vec2 hitUV = vec2(w * uv0 + u * uv1 + v * uv2);
+
+        // 击中光源：任意 bounce 都要累加 emission * throughput（路径贡献）
         if (length(hitTri.emission) > 0.1) {
-            if (bounce == 0) L_out += hitTri.emission;
+            L_out += hitTri.emission * throughput;
             break;
         }
 
+        /*
         // NEE
-        vec3 l_pos, l_normal, l_emit;
-        float pdf_light;
-        sampleLight(l_pos, l_normal, l_emit, pdf_light);
+        if (hitTri.texID < 0.5){
+            vec3 l_pos, l_normal, l_emit;
+            float pdf_light;
+            sampleLight(l_pos, l_normal, l_emit, pdf_light);
+    
+            vec3 lightDir = normalize(l_pos - hitPoint);
+            float lightDist = length(l_pos - hitPoint);
+            float shadowT;
+            int shadowIdx;
+            
+            // no block
+            if (intersectScene(hitPoint + nl * 0.001, lightDir, shadowT, shadowIdx, u, v)) {
+                if (shadowIdx != -1 && abs(shadowT - lightDist) < 0.01 && u_lightCount > 0 && pdf_light > 0.0) {
+                    
+                    vec3 viewDir = -d;
+                    vec3 f_r = evalBlinnPhong(hitTri, viewDir, lightDir, nl, hitUV);
+                    float cosTheta = max(0.0, dot(nl, lightDir));
+                    float cosTheta1 = max(0.0, dot(l_normal, -lightDir));
+                    // L_out += min(vec3(200.0), (l_emit * f_r * cosTheta * cosTheta1 / (lightDist * lightDist) / pdf_light) * throughput);
+                    L_out += (l_emit * f_r * cosTheta * cosTheta1 / (lightDist * lightDist) / pdf_light) * throughput;
+    
+                }
+            }
+        }
+        */
 
-        vec3 lightDir = normalize(l_pos - hitPoint);
-        float lightDist = length(l_pos - hitPoint);
-        float shadowT;
-        int shadowIdx;
-        
-        // no block
-        if (intersectScene(hitPoint + N * 1e-4, lightDir, shadowT, shadowIdx, u, v)) {
-            if (shadowIdx != -1 && abs(shadowT - lightDist) < 0.01 && u_lightCount > 0 && pdf_light > 0.0) {
-                /*
-                vec3 f_r = hitTri.color / 3.14159265; 
-                float cosTheta = max(0.0, dot(N, lightDir));
+        // --- 修改后的 NEE 部分 ---
+        if (hitTri.texID < 0.5) { // 仅非透明物体（如地面）接收直接光阴影
+            vec3 l_pos, l_normal, l_emit;
+            float pdf_light;
+            sampleLight(l_pos, l_normal, l_emit, pdf_light);
+
+            vec3 lightDir = normalize(l_pos - hitPoint);
+            float lightDist = length(l_pos - hitPoint);
+
+            vec3 shadowWeight = vec3(1.0); // 初始光强
+            vec3 shadowOrig = hitPoint + nl * 1e-3; // 使用定向法线 nl 偏移
+            float distLeft = lightDist;
+
+            // 穿透循环：允许光线穿过钻石的前后脸
+            for (int s_bounce = 0; s_bounce < 4; s_bounce++) {
+                float sT, sU, sV;
+                int sIdx;
+                if (intersectScene(shadowOrig, lightDir, sT, sIdx, sU, sV) && sT < (distLeft - 1e-3)) {
+                    Triangle sTri = triangles[sIdx];
+                    if (sTri.texID > 0.5) {
+                        // --- 比尔定律模拟 ---
+                        // 钻石很亮，吸收系数 sigma 较小。1.0 - color 得到吸收率
+                        vec3 sigma = 1.0 - sTri.color; 
+                        float shadowDensity = 0.01; // 钻石建议设低一点，保持晶莹感
+
+                        // 这里的 sT 是光线在透明物体内部（或到下一个交点）的距离
+                        shadowWeight *= exp(-sigma * shadowDensity * sT);
+
+                        // 伪造汇聚效果：如果是钻石，稍微补偿一点亮度
+                        shadowWeight *= 3; 
+                        shadowWeight = vec3(0.0) + sTri.color * shadowWeight;
+
+                        // 推进射线起点，继续探测
+                        shadowOrig = shadowOrig + lightDir * (sT + 1e-3);
+                        distLeft -= (sT + 1e-3);
+                    } else {
+                        // 撞击到不透明物体，阴影彻底变黑
+                        shadowWeight = vec3(0.0);
+                        break;
+                    }
+                } else {
+                    break; // 到达光源
+                }
+            }
+
+            if (length(shadowWeight) > 0.0) {
+                vec3 f_r = evalBlinnPhong(hitTri, -d, lightDir, nl, hitUV);
+                float cosTheta = max(0.0, dot(nl, lightDir));
                 float cosTheta1 = max(0.0, dot(l_normal, -lightDir));
-                L_out += (l_emit * f_r * cosTheta * cosTheta1 / (lightDist * lightDist) / pdf_light) * throughput;
-                */
-                vec3 viewDir = -d;
-                vec3 f_r = evalBlinnPhong(hitTri, viewDir, lightDir, N);
-                float cosTheta = max(0.0, dot(N, lightDir));
-                float cosTheta1 = max(0.0, dot(l_normal, -lightDir));
-                L_out += min(vec3(20.0), (l_emit * f_r * cosTheta * cosTheta1 / (lightDist * lightDist) / pdf_light) * throughput);
+                // 应用带颜色的 shadowWeight
+                L_out += (l_emit * f_r * cosTheta * cosTheta1 / (lightDist * lightDist) / pdf_light) * throughput * shadowWeight;
             }
         }
 
@@ -366,69 +562,39 @@ vec3 Render(vec3 d) {
 
         vec3 wi;
         float pdf;
-        if (hitTri.specularExponent > 1000.0) {
-            // 镜面反射：wi 就是完美的反射向量
-            wi = reflect(currDir, N); 
-            pdf = 1.0; // 镜面反射是确定性的，PDF 设为 1
-        } else {
-            // 漫反射：继续用你原来的随机采样
-            wi = sampleDiffuse(N);
-            pdf = 1.0 / (2.0 * 3.14159265); 
-        }
+        if (hitTri.texID > 0.5){
+            float ior = 2.417; 
+            float kr = fresnel(currDir, nl, ior);
 
-        vec3 f_r = evalBlinnPhong(hitTri, -currDir, wi, N);
-        float cosTheta = max(0.0, dot(wi, N)); 
-        if (hitTri.specularExponent > 1000.0) 
-        {
-            throughput *= hitTri.Ks / RR;
-        }
-        else 
-        {
-            throughput *= (f_r * cosTheta) / pdf / RR;
-        }
-
-        currOrig = hitPoint + N * 1e-4;
-        currDir = wi;
-        // vec3 wi = sampleDiffuse(N);
-        // float pdf_hemi = 1.0 / (2.0 * 3.14159265); // hemisphere sample
-        // float pdf_hemi = dot(wi, N) / 3.14159265;
-
-        float nextT;
-        int nextIdx;
-        if (intersectScene(hitPoint + N * 1e-4, wi, nextT, nextIdx, u, v)) {
-            if (length(triangles[nextIdx].emission) < 0.1) {
-                // vec3 f_r = hitTri.color / 3.14159265;
-                
+            if (rand() < kr) {
+                wi = reflect(currDir, nl);
             } else {
-                L_out += triangles[nextIdx].emission * throughput;
-                break; // hit light
+                float eta = into ? (1.0 / ior) : ior;
+                wi = refract(currDir, nl, eta);
+                // 处理全反射
+                if (length(wi) < 0.01) wi = reflect(currDir, nl);
             }
-        } else {
-            // 射线弹跳后射向了天空
-            // float t_sky = 0.5 * (wi.y + 1.0);
-            // vec3 skyColor = mix(vec3(1.0), vec3(0.5, 0.7, 1.0), t_sky) * 0.5;
-            float t_sky = max(0.0, wi.y); // 只取上半球 [cite: 191]
-            // 使用 pow(t, 2.0) 让地平线处更亮，头顶蓝色更深邃
-            vec3 skyColorTop = vec3(0.1, 0.2, 0.8); // 调深蓝色
-            vec3 horizonColor = vec3(0.8);
-            vec3 finalSky = mix(horizonColor, skyColorTop, pow(t_sky, 0.7)) * 0.4; 
-
-            // 如果 wi.y < 0，说明射向了“地面以下”，给一个暗色，防止球底太白
-            if (wi.y < 0.0) 
-            {
-                float groundT = pow(abs(wi.y), 0.6); // 0.6 次方是为了拉开层次
-
-                // 从地平线的浅灰(0.3) 渐变到 脚底的深黑(0.02)
-                vec3 horizonGray = vec3(0.3); 
-                vec3 deepGround = vec3(0.02);
-
-                finalSky = mix(horizonGray, deepGround, groundT);
-            }
-
-            // 这行会让球面上映照出漂亮的蓝天
-            L_out += finalSky * throughput;
-            break; // 路径结束
+            // throughput *= hitColor / RR;
+            throughput *= 1.0 / RR;
         }
+        else{
+            if (hitTri.specularExponent > 1000.0) {
+                wi = reflect(currDir, nl); 
+                pdf = 1.0;
+                throughput *= hitTri.Ks / RR;
+            } else {
+                wi = sampleDiffuse(nl);
+                pdf = 1.0 / (2.0 * 3.14159265); 
+
+                vec3 f_r = evalBlinnPhong(hitTri, -currDir, wi, nl, hitUV);
+                float cosTheta = max(0.0, dot(wi, nl));
+                throughput *= (f_r * cosTheta) / pdf / RR;
+            }
+        }
+
+        currOrig = hitPoint + wi * 0.001;
+        currDir = wi;
+        
     }
     return L_out;
 }
@@ -441,6 +607,12 @@ void main()
     if (i >= imageWidth || j >= imageHeight)
         return;
 
+    if (u_passMode == 1) {
+        seed = uint(i * 9119 + j * 31337 + frameCount * 6971 + 17) | 1u;
+        photonPass(ivec2(int(i), int(j)));
+        return;
+    }
+
     seed = uint(i * 1973 + j * 9277 + 1 * 26699) | 1u;
 
     uint idx = j * imageWidth + i;
@@ -448,7 +620,7 @@ void main()
 
 
     float minT = 1e30;      
-    vec3 hitColor = vec3(0); // BG
+    // vec3 hitColor = vec3(0); // BG
     bool hitAnything = false;
 
     
@@ -457,15 +629,37 @@ void main()
     float scale = tan(radians(fov * 0.5));
 
     vec3 currentSample = vec3(0);
-    for (int k = 0; k < 4; k++){
-        float x = (2.0 * (float(i) + mod(k, 2) / 2 + 0.25) / float(imageWidth) - 1.0)
-                  * aspect * scale;
-        float y = (1.0 - 2.0 * (float(j) + (k / 2) / 2.0 + 0.25) / float(imageHeight))
-                  * scale;
-        vec3 dir = normalize(vec3(-x, y, 1.0));
-        currentSample += Render(dir);
+
+    if (SuperSample > 0.5)
+    {
+        for (int k = 0; k < 4; k++){
+            float x = (2.0 * (float(i) + mod(k, 2) / 2 + 0.25) / float(imageWidth) - 1.0)
+                      * aspect * scale;
+            float y = (1.0 - 2.0 * (float(j) + (k / 2) / 2.0 + 0.25) / float(imageHeight))
+                      * scale;
+            // vec3 dir = normalize(vec3(-x, y, 1.0));
+            vec3 dir = normalize(-x * camRight + y * camUp + camForward);
+            currentSample += Render(dir);
+        }
+        currentSample /= 4;
     }
-    currentSample /= 4;
+    else{
+        float x = (2.0 * (float(i) + rand()) / float(imageWidth) - 1.0)
+                * aspect * scale;
+        float y = (1.0 - 2.0 * (float(j) + rand()) / float(imageHeight))
+                  * scale;
+        vec3 dir = normalize(-x * camRight + y * camUp + camForward);
+        currentSample = Render(dir);
+    }
+
+    vec3 causticAvg = imageLoad(causticImage, ivec2(i, j)).rgb / max(float(frameCount + 1), 1.0);
+    // Lift caustic mid/low values so patterns are easier to see
+    vec3 causticBoosted = pow(max(causticAvg, vec3(0.0)), vec3(0.75));
+    // Reduce saturation while preserving brightness contrast
+    float causticLuma = dot(causticBoosted, vec3(0.2126, 0.7152, 0.0722));
+    vec3 causticDesat = mix(vec3(causticLuma), causticBoosted, 0.55);
+    currentSample += causticDesat * u_causticStrength;
+
     vec3 finalColor = pow(currentSample, vec3(1.0 / 2.2));
     if (frameCount == 0) {
         imageStore(outImage, ivec2(i, j), vec4(finalColor, 1.0));

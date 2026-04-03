@@ -50,8 +50,10 @@ public:
     Material* m;
     bool isNeedNormalLerp = false;
     Vector3f vn0, vn1, vn2;
+    Vector2f uv0, uv1, uv2;
+    float texID;
 
-    Triangle(Vector3f _v0, Vector3f _v1, Vector3f _v2, Vector3f _vn0, Vector3f _vn1, Vector3f _vn2, Material* _m = nullptr, bool _needNormalLerp = false)
+    Triangle(Vector3f _v0, Vector3f _v1, Vector3f _v2, Vector3f _vn0, Vector3f _vn1, Vector3f _vn2, Vector2f _uv0, Vector2f _uv1, Vector2f _uv2, float _texID, Material* _m = nullptr, bool _needNormalLerp = false)
         : v0(_v0), v1(_v1), v2(_v2), m(_m)
     {
         e1 = v1 - v0;
@@ -65,6 +67,10 @@ public:
             vn1 = _vn1;
             vn2 = _vn2;
         }
+        uv0 = _uv0;
+        uv1 = _uv1;
+        uv2 = _uv2;
+        texID = _texID;
     }
 
     bool intersect(const Ray& ray) override;
@@ -98,12 +104,10 @@ public:
         
         TriangleGPU tg;
 
-        // 填充顶点数据
         tg.v0[0] = v0.x; tg.v0[1] = v0.y; tg.v0[2] = v0.z;
         tg.v1[0] = v1.x; tg.v1[1] = v1.y; tg.v1[2] = v1.z;
         tg.v2[0] = v2.x; tg.v2[1] = v2.y; tg.v2[2] = v2.z;
 
-        // 填充颜色（从材质中获取）
         auto col = m->Kd;
         tg.color[0] = col.x; tg.color[1] = col.y; tg.color[2] = col.z;
         tg.normal[0] = normal.x; tg.normal[1] = normal.y; tg.normal[2] = normal.z;
@@ -116,7 +120,7 @@ public:
 class MeshTriangle : public Object
 {
 public:
-    MeshTriangle(const std::string& filename, Material *mt = new Material(), bool needNormalLerp = false)
+    MeshTriangle(const std::string& filename, Material *mt = new Material(), bool needNormalLerp = false, int texID = -1)
     {
         objl::Loader loader;
         loader.LoadFile(filename);
@@ -134,6 +138,7 @@ public:
         for (int i = 0; i < mesh.Vertices.size(); i += 3) {
             std::array<Vector3f, 3> face_vertices;
             std::array<Vector3f, 3> vertexNormal;
+            std::array<Vector2f, 3> vertexUV;
             for (int j = 0; j < 3; j++) {
                 auto vert = Vector3f(mesh.Vertices[i + j].Position.X,
                                      mesh.Vertices[i + j].Position.Y,
@@ -156,6 +161,9 @@ public:
                     );
                     vertexNormal[j] = VN;
                 }
+
+                Vector2f uv = Vector2f(mesh.Vertices[i + j].TextureCoordinate.X, mesh.Vertices[i + j].TextureCoordinate.Y);
+                vertexUV[j] = uv;
             }
 
             triangles.emplace_back(face_vertices[0], 
@@ -164,6 +172,10 @@ public:
                                    vertexNormal[0], 
                                    vertexNormal[1], 
                                    vertexNormal[2], 
+                                   vertexUV[0],
+                                   vertexUV[1],
+                                   vertexUV[2],
+                                   texID,
                                    mt, 
                                    needNormalLerp);
         }
@@ -202,6 +214,11 @@ public:
             tg.n0[0] = tri.vn0.x; tg.n0[1] = tri.vn0.y; tg.n0[2] = tri.vn0.z;
             tg.n1[0] = tri.vn1.x; tg.n1[1] = tri.vn1.y; tg.n1[2] = tri.vn1.z;
             tg.n2[0] = tri.vn2.x; tg.n2[1] = tri.vn2.y; tg.n2[2] = tri.vn2.z;
+
+            tg.uv0U = tri.uv0.x; tg.uv0V = tri.uv0.y;
+            tg.uv1U = tri.uv1.x; tg.uv1V = tri.uv1.y;
+            tg.uv2U = tri.uv2.x; tg.uv2V = tri.uv2.y;
+            tg.texID = tri.texID;
             out.push_back(tg);
         }
     }

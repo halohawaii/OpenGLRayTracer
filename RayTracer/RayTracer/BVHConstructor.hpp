@@ -2,24 +2,22 @@
 #include <vector>
 #include <algorithm>
 #include <cmath>
-#include "BVH.hpp" // 必须包含，用于获取 Bounds3, Vector3f, TriangleGPU 的定义
+#include "BVH.hpp"
 
-// --- 临时构建节点 (只在构建过程中使用) ---
 struct NewBVHBuildNode {
     Bounds3 bounds;
     NewBVHBuildNode* left;
     NewBVHBuildNode* right;
     int splitAxis;
-    int firstPrimOffset; // 指向排序后的索引数组的偏移
-    int nPrimitives;     // 包含的三角形数量
+    int firstPrimOffset; 
+    int nPrimitives;     
 
     NewBVHBuildNode() : left(nullptr), right(nullptr), splitAxis(0), firstPrimOffset(0), nPrimitives(0) {}
 };
 
-// --- BVH 构造器类 ---
+
 class BVHConstructor {
 public:
-    // 最终输出给 GPU 的数据
     std::vector<BVHNodeGPU> bvhNodes;
     std::vector<TriangleGPU> orderedTriList;
 
