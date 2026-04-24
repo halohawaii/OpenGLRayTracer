@@ -23,13 +23,15 @@ int main(int argc, char** argv)
     Material* whiteMirror = new Material(MIRROR, Vector3f(0.0f), Vector3f(1.0f, 1.0f, 1.0f));
     //blue->Kd = Vector3f(0.0f, 0.5f, 1.0f);
     Material* bluePlastic = new Material(DIFFUSE, Vector3f(0.0f), Vector3f(0.2f, 0.1f, 1.0f));
-    Material* blueGlass = new Material(MIRROR, Vector3f(0.0f), Vector3f(0.1f, 0.1f, 0.9f));
+    Material* blueGlass = new Material(MIRROR, Vector3f(0.0f), Vector3f(0.1f, 0.1f, 0.1f));
+    Material* whiteGlass = new Material(MIRROR, Vector3f(0.0f), Vector3f(0.1f, 0.1f, 0.1f));
     Material* yellowGlass = new Material(MIRROR, Vector3f(0.0f), Vector3f(0.9f, 0.9f, 0.1f));
     Material* redDiamond = new Material(MIRROR, Vector3f(0.0f), Vector3f(0.9f, 0.1f, 0.1f));
-    Material* light = new Material(DIFFUSE, (8.0f * Vector3f(0.747f+0.058f, 0.747f+0.258f, 0.747f) * 2 + 15.60f * Vector3f(0.740f+0.287f,0.740f+0.160f,0.740f) * 2 + 18.40f *Vector3f(0.737f+0.642f,0.737f+0.159f,0.737f) * 2));
+    Material* light = new Material(DIFFUSE, (8.0f * Vector3f(0.747f+0.058f, 0.747f+0.258f, 0.747f) * 5 + 15.60f * Vector3f(0.740f+0.287f,0.740f+0.160f,0.740f) * 5 + 18.40f *Vector3f(0.737f+0.642f,0.737f+0.159f,0.737f) * 5));
     light->Kd = Vector3f(0.65f);
 
-    std::string rootPath = "./";
+    std::string rootPath = "D:/711/OpenGLRayTracer/RayTracer/RayTracer/";
+/*
     MeshTriangle floor(rootPath + "models/cornellbox/floor.obj", blackWood, false);
     MeshTriangle ball1(rootPath + "models/cornellbox/ball1.obj", whiteMirror, true);
     MeshTriangle ball2(rootPath + "models/cornellbox/ball2.obj", bluePlastic, true);
@@ -48,6 +50,17 @@ int main(int argc, char** argv)
     scene.Add(&shortbox);
     //scene.Add(&bunny);
     scene.Add(&diamond);
+    scene.Add(&light_);
+*/
+
+    MeshTriangle pool(rootPath + "models/pool/Pool.obj", whiteWood);
+    MeshTriangle poolEdge(rootPath + "models/pool/PoolEdge.obj", redWood);
+    MeshTriangle water(rootPath + "models/pool/Water.obj", blueGlass, true, 1);
+    MeshTriangle light_(rootPath + "models/cornellbox/light2.obj", light);
+
+    scene.Add(&pool);
+    scene.Add(&poolEdge);
+    scene.Add(&water);
     scene.Add(&light_);
 
     scene.buildBVH();

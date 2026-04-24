@@ -429,7 +429,8 @@ vec3 Render(vec3 d) {
 
         Triangle hitTri = triangles[hitIdx];
         vec3 hitPoint = currOrig + currDir * minT;
-        vec3 hitColor = hitTri.color * 20;
+        // vec3 hitColor = hitTri.color * 20;
+        vec3 hitColor = hitTri.color;
 
         //lerp normal
         vec3 N;
@@ -450,7 +451,7 @@ vec3 Render(vec3 d) {
             // 计算吸收系数。你可以直接用 1.0 - hitTri.color 来定义吸收率
             // 颜色越深，sigma 越大
             vec3 sigma = 1.0 - hitColor; 
-            float density = 0.1; // 控制玻璃颜色的浓度
+            float density = 0.0; // 控制玻璃颜色的浓度
             
             // 比尔定律公式
             throughput.r *= exp(-sigma.r * density * minT);
