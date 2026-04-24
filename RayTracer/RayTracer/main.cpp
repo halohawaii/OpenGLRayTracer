@@ -29,7 +29,7 @@ int main(int argc, char** argv)
     Material* light = new Material(DIFFUSE, (8.0f * Vector3f(0.747f+0.058f, 0.747f+0.258f, 0.747f) * 2 + 15.60f * Vector3f(0.740f+0.287f,0.740f+0.160f,0.740f) * 2 + 18.40f *Vector3f(0.737f+0.642f,0.737f+0.159f,0.737f) * 2));
     light->Kd = Vector3f(0.65f);
 
-    std::string rootPath = "D:/711/OpenGLRayTracer/RayTracer/RayTracer/";
+    std::string rootPath = "./";
     MeshTriangle floor(rootPath + "models/cornellbox/floor.obj", blackWood, false);
     MeshTriangle ball1(rootPath + "models/cornellbox/ball1.obj", whiteMirror, true);
     MeshTriangle ball2(rootPath + "models/cornellbox/ball2.obj", bluePlastic, true);
