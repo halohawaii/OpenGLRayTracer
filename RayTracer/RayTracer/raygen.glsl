@@ -82,6 +82,8 @@ uniform float u_russianRoulette;
 uniform int   u_photonsPerPixel;
 uniform int   u_maxPhotonBounces;
 uniform int   u_maxRayBounces;
+uniform int   u_toneMappingMode; // 0: gamma only, 1: ACES, 2: Reinhard
+uniform float u_exposure;        // pre-tone-map exposure multiplier
 
 layout(rgba32f, binding = 2) uniform image2D outImage;
 layout(rgba32f, binding = 7) uniform image2D causticImage;
@@ -605,6 +607,28 @@ vec3 Render(vec3 d) {
     return L_out;
 }
 
+// --- Tone mapping operators ---
+vec3 toneMapACES(vec3 x) {
+    // Narkowicz 2015 ACES approximation
+    const float a = 2.51;
+    const float b = 0.03;
+    const float c = 2.43;
+    const float d = 0.59;
+    const float e = 0.14;
+    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+}
+
+vec3 toneMapReinhard(vec3 x) {
+    return x / (x + vec3(1.0));
+}
+
+vec3 applyToneMapping(vec3 hdr) {
+    hdr *= u_exposure;
+    if (u_toneMappingMode == 1) return toneMapACES(hdr);
+    if (u_toneMappingMode == 2) return toneMapReinhard(hdr);
+    return clamp(hdr, 0.0, 1.0); // mode 0: linear clamp
+}
+
 void main()
 {
     uint i = gl_GlobalInvocationID.x;
@@ -666,7 +690,8 @@ void main()
     vec3 causticDesat = mix(vec3(causticLuma), causticBoosted, 0.55);
     currentSample += causticDesat * u_causticStrength;
 
-    vec3 finalColor = pow(currentSample, vec3(1.0 / 2.2));
+    vec3 mapped = applyToneMapping(currentSample);
+    vec3 finalColor = pow(mapped, vec3(1.0 / 2.2));
     if (frameCount == 0) {
         imageStore(outImage, ivec2(i, j), vec4(finalColor, 1.0));
     } else {

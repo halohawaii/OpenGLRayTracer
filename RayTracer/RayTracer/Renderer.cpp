@@ -239,6 +239,8 @@ void Renderer::Render(const Scene& scene)
     float param_russianRoulette  = 0.8f;
     int   param_maxPhotonBounces = 12;
     int   param_maxRayBounces    = 20;
+    int   param_toneMappingMode  = 1;     // 0=Linear, 1=ACES, 2=Reinhard
+    float param_exposure         = 1.0f;
     // Initialized to -1 to force upload on first frame
     float sent_causticStrength  = -1.0f;
     float sent_lightIntensity   = -1.0f;
@@ -247,6 +249,8 @@ void Renderer::Render(const Scene& scene)
     float sent_russianRoulette  = -1.0f;
     int   sent_maxPhotonBounces = -1;
     int   sent_maxRayBounces    = -1;
+    int   sent_toneMappingMode  = -1;
+    float sent_exposure         = -1.0f;
 
     std::vector<Vector3f> framebuffer(scene.width * scene.height);
 
@@ -388,6 +392,8 @@ void Renderer::Render(const Scene& scene)
     GLint photonsPerPixelLoc  = glGetUniformLocation(rayGenProgram, "u_photonsPerPixel");
     GLint maxPhotonBouncesLoc = glGetUniformLocation(rayGenProgram, "u_maxPhotonBounces");
     GLint maxRayBouncesLoc    = glGetUniformLocation(rayGenProgram, "u_maxRayBounces");
+    GLint toneMappingModeLoc  = glGetUniformLocation(rayGenProgram, "u_toneMappingMode");
+    GLint exposureLoc         = glGetUniformLocation(rayGenProgram, "u_exposure");
     glUniform1i(glGetUniformLocation(rayGenProgram, "imageWidth"),   scene.width);
     glUniform1i(glGetUniformLocation(rayGenProgram, "imageHeight"),  scene.height);
     glUniform1i(glGetUniformLocation(rayGenProgram, "u_lightCount"), (int)lightIndices.size());
@@ -422,6 +428,8 @@ void Renderer::Render(const Scene& scene)
         if (param_photonsPerPixel  != sent_photonsPerPixel)  { glUniform1i(photonsPerPixelLoc,  param_photonsPerPixel);  sent_photonsPerPixel  = param_photonsPerPixel;  paramsChanged = true; }
         if (param_maxPhotonBounces != sent_maxPhotonBounces) { glUniform1i(maxPhotonBouncesLoc, param_maxPhotonBounces); sent_maxPhotonBounces = param_maxPhotonBounces; paramsChanged = true; }
         if (param_maxRayBounces    != sent_maxRayBounces)    { glUniform1i(maxRayBouncesLoc,    param_maxRayBounces);    sent_maxRayBounces    = param_maxRayBounces;    paramsChanged = true; }
+        if (param_toneMappingMode  != sent_toneMappingMode)  { glUniform1i(toneMappingModeLoc,  param_toneMappingMode);  sent_toneMappingMode  = param_toneMappingMode;  paramsChanged = true; }
+        if (param_exposure         != sent_exposure)         { glUniform1f(exposureLoc,         param_exposure);         sent_exposure         = param_exposure;         paramsChanged = true; }
         if (paramsChanged) currentFrame = 0;
 
         // --- ImGui panel ---
@@ -437,6 +445,10 @@ void Renderer::Render(const Scene& scene)
         ImGui::SliderFloat("Russian Roulette", &param_russianRoulette,   0.5f, 1.0f);
         ImGui::SliderInt  ("Max Photon Depth", &param_maxPhotonBounces,  1,    30);
         ImGui::SliderInt  ("Max Ray Depth",    &param_maxRayBounces,     1,    30);
+        ImGui::Separator();
+        const char* tonemapItems[] = { "Linear", "ACES Filmic", "Reinhard" };
+        ImGui::Combo("Tone Mapping", &param_toneMappingMode, tonemapItems, 3);
+        ImGui::SliderFloat("Exposure", &param_exposure, 0.1f, 5.0f);
         ImGui::Separator();
         if (ImGui::Button("Reset Accumulation")) currentFrame = 0;
         ImGui::End();
