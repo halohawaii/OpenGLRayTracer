@@ -434,7 +434,7 @@ void Renderer::Render(const Scene& scene)
 
         // --- ImGui panel ---
         ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_Once);
-        ImGui::SetNextWindowSize(ImVec2(400, 250), ImGuiCond_Once);
+        ImGui::SetNextWindowSize(ImVec2(400, 350), ImGuiCond_Once);
         ImGui::Begin("Path Tracer Controls");
         ImGui::Text("SPP: %d / %d", currentFrame, spp);
         ImGui::Separator();
