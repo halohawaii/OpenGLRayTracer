@@ -15,6 +15,9 @@
 #include "BVHConstructor.hpp"
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
+#include "imgui.h"
+#include "imgui_impl_glfw.h"
+#include "imgui_impl_opengl3.h"
 
 inline float deg2rad(const float& deg) { return deg * M_PI / 180.0; }
 
@@ -48,7 +51,8 @@ GLuint loadTexture(const char* path) {
     return textureID;
 }
 
-void processInput(GLFWwindow* window, CameraGPU& cam, int& frameCount, bool& isExit) {
+void processInput(GLFWwindow* window, CameraGPU& cam, int& frameCount, bool& isExit, bool imguiWantsKeyboard) {
+    if (imguiWantsKeyboard) return;
     float moveSpeed = 5.0f;
     float rotateSpeed = 0.5f;
     bool moved = false;
@@ -227,6 +231,23 @@ void Renderer::Render(const Scene& scene)
 
     cam.SuperSample = 0; //SS
 
+    // --- ImGui parameter state ---
+    float param_causticStrength  = 4.0f;
+    float param_lightIntensity   = 1.0f;
+    float param_ior              = 2.417f;
+    int   param_photonsPerPixel  = 4;
+    float param_russianRoulette  = 0.8f;
+    int   param_maxPhotonBounces = 12;
+    int   param_maxRayBounces    = 20;
+    // Initialized to -1 to force upload on first frame
+    float sent_causticStrength  = -1.0f;
+    float sent_lightIntensity   = -1.0f;
+    float sent_ior              = -1.0f;
+    int   sent_photonsPerPixel  = -1;
+    float sent_russianRoulette  = -1.0f;
+    int   sent_maxPhotonBounces = -1;
+    int   sent_maxRayBounces    = -1;
+
     std::vector<Vector3f> framebuffer(scene.width * scene.height);
 
     // ---------- Initialize GLFW ----------
@@ -252,6 +273,13 @@ void Renderer::Render(const Scene& scene)
         std::cerr << "Failed to initialize GLAD" << std::endl;
         return;
     }
+
+    // ---------- Initialize ImGui ----------
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGui::StyleColorsDark();
+    ImGui_ImplGlfw_InitForOpenGL(window, true);
+    ImGui_ImplOpenGL3_Init("#version 430");
 
     GLuint cameraUBO;
     glGenBuffers(1, &cameraUBO);
@@ -340,7 +368,7 @@ void Renderer::Render(const Scene& scene)
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 5, lightSSBO);
 
     // Textures
-    GLuint floorTex = loadTexture("D:/711/OpenGLRayTracer/RayTracer/RayTracer/textures/T_Floor2_D.png");
+    GLuint floorTex = loadTexture("./textures/T_Floor2_D.png");
 
 
     // ---------- Read Compute Shader ----------
@@ -351,12 +379,18 @@ void Renderer::Render(const Scene& scene)
     GLuint rayGenProgram = CompileComputeShader(csSource.c_str());
 
     glUseProgram(rayGenProgram);
-    GLint frameCountLoc = glGetUniformLocation(rayGenProgram, "frameCount");
-    GLint passModeLoc = glGetUniformLocation(rayGenProgram, "u_passMode");
-    glUniform1i(glGetUniformLocation(rayGenProgram, "imageWidth"), scene.width);
-    glUniform1i(glGetUniformLocation(rayGenProgram, "imageHeight"), scene.height);
+    GLint frameCountLoc       = glGetUniformLocation(rayGenProgram, "frameCount");
+    GLint passModeLoc         = glGetUniformLocation(rayGenProgram, "u_passMode");
+    GLint causticStrengthLoc  = glGetUniformLocation(rayGenProgram, "u_causticStrength");
+    GLint lightIntensityLoc   = glGetUniformLocation(rayGenProgram, "u_lightIntensity");
+    GLint iorLoc              = glGetUniformLocation(rayGenProgram, "u_ior");
+    GLint rrLoc               = glGetUniformLocation(rayGenProgram, "u_russianRoulette");
+    GLint photonsPerPixelLoc  = glGetUniformLocation(rayGenProgram, "u_photonsPerPixel");
+    GLint maxPhotonBouncesLoc = glGetUniformLocation(rayGenProgram, "u_maxPhotonBounces");
+    GLint maxRayBouncesLoc    = glGetUniformLocation(rayGenProgram, "u_maxRayBounces");
+    glUniform1i(glGetUniformLocation(rayGenProgram, "imageWidth"),   scene.width);
+    glUniform1i(glGetUniformLocation(rayGenProgram, "imageHeight"),  scene.height);
     glUniform1i(glGetUniformLocation(rayGenProgram, "u_lightCount"), (int)lightIndices.size());
-    glUniform1f(glGetUniformLocation(rayGenProgram, "u_causticStrength"), 4.0f);
 
     auto start = std::chrono::system_clock::now();
     int spp = 1024;
@@ -365,11 +399,48 @@ void Renderer::Render(const Scene& scene)
     while (!glfwWindowShouldClose(window))
     {
         glfwPollEvents();
-        processInput(window, cam, currentFrame, esc);
+
+        // --- ImGui new frame ---
+        ImGui_ImplOpenGL3_NewFrame();
+        ImGui_ImplGlfw_NewFrame();
+        ImGui::NewFrame();
+        ImGuiIO& io = ImGui::GetIO();
+
+        processInput(window, cam, currentFrame, esc, io.WantCaptureKeyboard);
         if (esc)
         {
             break;
         }
+
+        // --- Detect parameter changes and upload uniforms ---
+        glUseProgram(rayGenProgram);
+        bool paramsChanged = false;
+        if (param_causticStrength  != sent_causticStrength)  { glUniform1f(causticStrengthLoc,  param_causticStrength);  sent_causticStrength  = param_causticStrength;  paramsChanged = true; }
+        if (param_lightIntensity   != sent_lightIntensity)   { glUniform1f(lightIntensityLoc,   param_lightIntensity);   sent_lightIntensity   = param_lightIntensity;   paramsChanged = true; }
+        if (param_ior              != sent_ior)              { glUniform1f(iorLoc,              param_ior);              sent_ior              = param_ior;              paramsChanged = true; }
+        if (param_russianRoulette  != sent_russianRoulette)  { glUniform1f(rrLoc,               param_russianRoulette);  sent_russianRoulette  = param_russianRoulette;  paramsChanged = true; }
+        if (param_photonsPerPixel  != sent_photonsPerPixel)  { glUniform1i(photonsPerPixelLoc,  param_photonsPerPixel);  sent_photonsPerPixel  = param_photonsPerPixel;  paramsChanged = true; }
+        if (param_maxPhotonBounces != sent_maxPhotonBounces) { glUniform1i(maxPhotonBouncesLoc, param_maxPhotonBounces); sent_maxPhotonBounces = param_maxPhotonBounces; paramsChanged = true; }
+        if (param_maxRayBounces    != sent_maxRayBounces)    { glUniform1i(maxRayBouncesLoc,    param_maxRayBounces);    sent_maxRayBounces    = param_maxRayBounces;    paramsChanged = true; }
+        if (paramsChanged) currentFrame = 0;
+
+        // --- ImGui panel ---
+        ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_Once);
+        ImGui::SetNextWindowSize(ImVec2(400, 250), ImGuiCond_Once);
+        ImGui::Begin("Path Tracer Controls");
+        ImGui::Text("SPP: %d / %d", currentFrame, spp);
+        ImGui::Separator();
+        ImGui::SliderFloat("Caustic Strength", &param_causticStrength,  0.0f, 10.0f);
+        ImGui::SliderFloat("Light Intensity",  &param_lightIntensity,   0.0f, 5.0f);
+        ImGui::SliderFloat("IOR",              &param_ior,               1.0f, 3.0f);
+        ImGui::SliderInt  ("Photons/Pixel",    &param_photonsPerPixel,   1,    16);
+        ImGui::SliderFloat("Russian Roulette", &param_russianRoulette,   0.5f, 1.0f);
+        ImGui::SliderInt  ("Max Photon Depth", &param_maxPhotonBounces,  1,    30);
+        ImGui::SliderInt  ("Max Ray Depth",    &param_maxRayBounces,     1,    30);
+        ImGui::Separator();
+        if (ImGui::Button("Reset Accumulation")) currentFrame = 0;
+        ImGui::End();
+        ImGui::Render();
 
         if (currentFrame < spp)
         {
@@ -402,7 +473,6 @@ void Renderer::Render(const Scene& scene)
 
             glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 
-
             currentFrame++;
 
             if (currentFrame % 10 == 0) {
@@ -417,9 +487,15 @@ void Renderer::Render(const Scene& scene)
             0, scene.height, scene.width, 0,
             GL_COLOR_BUFFER_BIT, GL_NEAREST);
 
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
         glfwSwapBuffers(window);
     }
+
+    ImGui_ImplOpenGL3_Shutdown();
+    ImGui_ImplGlfw_Shutdown();
+    ImGui::DestroyContext();
     auto stop = std::chrono::system_clock::now();
     std::cout << "Render Time: " << std::chrono::duration_cast<std::chrono::milliseconds>(stop - start).count() << "milliseconds\n\n";
 

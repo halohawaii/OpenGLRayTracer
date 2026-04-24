@@ -107,7 +107,7 @@
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(SolutionDir)glfw-3.4.bin.WIN64\include;$(SolutionDir)RayTracer\glad\include</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir)glfw-3.4.bin.WIN64\include;$(SolutionDir)RayTracer\glad\include;$(ProjectDir)imgui;$(ProjectDir)imgui\backends</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -155,10 +155,20 @@
     <ClCompile Include="main.cpp" />
     <ClCompile Include="Object.cpp" />
     <ClCompile Include="Renderer.cpp">
-      <AdditionalIncludeDirectories Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(SolutionDir)glfw-3.4.bin.WIN64\include;$(SolutionDir)RayTracer\glad\include;</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(SolutionDir)glfw-3.4.bin.WIN64\include;$(SolutionDir)RayTracer\glad\include;$(ProjectDir)imgui;$(ProjectDir)imgui\backends;</AdditionalIncludeDirectories>
     </ClCompile>
     <ClCompile Include="Scene.cpp" />
     <ClCompile Include="Vector.cpp" />
+    <ClCompile Include="imgui\imgui.cpp" />
+    <ClCompile Include="imgui\imgui_draw.cpp" />
+    <ClCompile Include="imgui\imgui_tables.cpp" />
+    <ClCompile Include="imgui\imgui_widgets.cpp" />
+    <ClCompile Include="imgui\backends\imgui_impl_glfw.cpp">
+      <AdditionalIncludeDirectories Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(SolutionDir)glfw-3.4.bin.WIN64\include;$(SolutionDir)RayTracer\glad\include;$(ProjectDir)imgui;$(ProjectDir)imgui\backends;</AdditionalIncludeDirectories>
+    </ClCompile>
+    <ClCompile Include="imgui\backends\imgui_impl_opengl3.cpp">
+      <AdditionalIncludeDirectories Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(SolutionDir)glfw-3.4.bin.WIN64\include;$(SolutionDir)RayTracer\glad\include;$(ProjectDir)imgui;$(ProjectDir)imgui\backends;</AdditionalIncludeDirectories>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <None Include="raygen.glsl" />

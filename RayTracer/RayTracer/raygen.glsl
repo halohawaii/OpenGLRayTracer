@@ -76,6 +76,12 @@ uniform int frameCount;
 uniform int u_lightCount;
 uniform int u_passMode;          // 0: render pass, 1: photon pass
 uniform float u_causticStrength; // caustic map intensity scale
+uniform float u_lightIntensity;  // global light intensity multiplier
+uniform float u_ior;
+uniform float u_russianRoulette;
+uniform int   u_photonsPerPixel;
+uniform int   u_maxPhotonBounces;
+uniform int   u_maxRayBounces;
 
 layout(rgba32f, binding = 2) uniform image2D outImage;
 layout(rgba32f, binding = 7) uniform image2D causticImage;
@@ -284,7 +290,7 @@ void sampleLight(out vec3 pos, out vec3 normal, out vec3 emit, out float pdf) {
     float r2 = rand();
     pos = t.v0 * (1.0 - r1) + t.v1 * (r1 * (1.0 - r2)) + t.v2 * (r1 * r2);
     normal = normalize(t.normal);
-    emit = t.emission;
+    emit = t.emission * u_lightIntensity;
     pdf = 1.0 / total_emit_area;
 }
 
@@ -334,8 +340,7 @@ void photonPass(ivec2 launchPix) {
         imageStore(causticImage, launchPix, vec4(0.0));
     }
 
-    const int PHOTONS_PER_PIXEL = 4;
-    for (int p = 0; p < PHOTONS_PER_PIXEL; ++p) {
+    for (int p = 0; p < u_photonsPerPixel; ++p) {
         vec3 l_pos, l_normal, l_emit;
         float pdf_light;
         sampleLight(l_pos, l_normal, l_emit, pdf_light);
@@ -343,12 +348,12 @@ void photonPass(ivec2 launchPix) {
 
         vec3 photonOrig = l_pos + l_normal * 1e-3;
         vec3 photonDir = sampleCosineHemisphere(l_normal);
-        float photonCount = float(imageWidth * imageHeight * PHOTONS_PER_PIXEL);
+        float photonCount = float(imageWidth * imageHeight * u_photonsPerPixel);
         vec3 flux = l_emit / max(pdf_light * photonCount, 1e-5);
 
         bool passedDielectric = false;
         vec3 causticTint = vec3(1.0);
-        for (int bounce = 0; bounce < 12; bounce++) {
+        for (int bounce = 0; bounce < u_maxPhotonBounces; bounce++) {
             float t, u, v;
             int hitIdx;
             if (!intersectScene(photonOrig, photonDir, t, hitIdx, u, v)) break;
@@ -367,7 +372,7 @@ void photonPass(ivec2 launchPix) {
                 float tintDensity = 0.01;
                 causticTint *= exp(-sigma * tintDensity * t);
 
-                float ior = 2.417;
+                float ior = u_ior;
                 float kr = fresnel(photonDir, N, ior);
                 if (rand() < kr) {
                     photonDir = reflect(photonDir, N);
@@ -401,7 +406,7 @@ vec3 Render(vec3 d) {
     vec3 currOrig = camPos;
     vec3 currDir = d;
 
-    for (int bounce = 0; bounce < 20; bounce++) {
+    for (int bounce = 0; bounce < u_maxRayBounces; bounce++) {
         float minT, u, v;
         int hitIdx;
 
@@ -471,7 +476,7 @@ vec3 Render(vec3 d) {
 
         // 击中光源：任意 bounce 都要累加 emission * throughput（路径贡献）
         if (length(hitTri.emission) > 0.1) {
-            L_out += hitTri.emission * throughput;
+            L_out += hitTri.emission * u_lightIntensity * throughput;
             break;
         }
 
@@ -558,13 +563,13 @@ vec3 Render(vec3 d) {
         }
 
         // Indirect and RR
-        float RR = 0.8;
+        float RR = u_russianRoulette;
         if (rand() > RR) break;
 
         vec3 wi;
         float pdf;
         if (hitTri.texID > 0.5){
-            float ior = 2.417; 
+            float ior = u_ior;
             float kr = fresnel(currDir, nl, ior);
 
             if (rand() < kr) {
