@@ -32,7 +32,7 @@ inline float get_random_float()
 {
     static std::random_device dev;
     static std::mt19937 rng(dev());
-    static std::uniform_real_distribution<float> dist(0.f, 1.f); // distribution in range [0，1]
+    static std::uniform_real_distribution<float> dist(0.f, 1.f);
 
     return dist(rng);
 }
@@ -60,21 +60,21 @@ struct TriangleGPU {
     float n0[3], uv1V;
     float n1[3], uv2U;
     float n2[3], uv2V;
-    float normal[3], hasVPNormal;   // 新增：面法线
-    float emission[3], texID; // 新增：自发光（光源识别）
-    float color[3], pad7;    // 物体颜色
+    float normal[3], hasVPNormal;
+    float emission[3], texID;
+    float color[3], materialType;
 
     float Ks[3], specularExponent;
 };
 
 struct BVHNodeGPU {
     float pMin[3];
-    int leftChild;      // 如果 >= 0，是左子节点的数组下标；如果 < 0，代表是叶子
+    int leftChild;
     float pMax[3];
-    int rightChild;     // 如果 >= 0，是右子节点的数组下标；
-    int nPrimitives;    // 该节点包含的三角形数量（0表示中间节点）
-    int primitiveIdx;   // 如果是叶子，存储该三角形在 triList 中的索引
-    float area;         // 用于重要性采样
-    int _pad;           // 对齐填充
+    int rightChild;
+    int nPrimitives;
+    int primitiveIdx;
+    float area;
+    int _pad;
     float _final_pads[4]; // (Block 4)
 };

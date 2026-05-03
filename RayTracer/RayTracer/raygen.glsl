@@ -37,7 +37,7 @@ struct Triangle {
     vec3 normal;
     float hasVPNormal;
     vec3 emission; float texID;
-    vec3 color;  float _p7;
+    vec3 color;  float materialType;
     vec3 Ks;
     float specularExponent;
 };
@@ -101,6 +101,27 @@ float rand() {
     return float(pcg_hash() >> 9u) * 0.00000011920929;
 }
 
+const int MAT_DIFFUSE = 0;
+const int MAT_WOOD    = 1;
+const int MAT_METAL   = 2;
+const int MAT_MIRROR  = 3;
+const int BVH_STACK_SIZE = 64;
+
+vec3 samplePhongLobe(vec3 axisDir, float shininess) {
+    float r1 = rand();
+    float r2 = rand();
+    float phi = 2.0 * 3.14159265 * r1;
+    float cosTheta = pow(max(1e-6, r2), 1.0 / (shininess + 1.0));
+    float sinTheta = sqrt(max(0.0, 1.0 - cosTheta * cosTheta));
+
+    vec3 w = normalize(axisDir);
+    vec3 up = (abs(w.z) < 0.999) ? vec3(0, 0, 1) : vec3(1, 0, 0);
+    vec3 u = normalize(cross(up, w));
+    vec3 v = cross(w, u);
+
+    return normalize(u * (cos(phi) * sinTheta) + v * (sin(phi) * sinTheta) + w * cosTheta);
+}
+
 // AABB
 bool IntersectAABB(vec3 orig, vec3 invDir, vec3 pMin, vec3 pMax, float t_min, float t_max) {
     vec3 t0 = (pMin - orig) * invDir;
@@ -147,9 +168,12 @@ bool intersectScene(vec3 orig, vec3 dir, out float minT, out int hitIdx, out flo
     hitIdx = -1;
     u_out = 0.0;
     v_out = 0.0;
+    if (nodes.length() == 0 || triangles.length() == 0) {
+        return false;
+    }
 
     vec3 invDir = 1.0 / dir;
-    int stack[16];
+    int stack[BVH_STACK_SIZE];
     int ptr = 0;
 
     stack[ptr++] = 0;
@@ -157,6 +181,9 @@ bool intersectScene(vec3 orig, vec3 dir, out float minT, out int hitIdx, out flo
     while (ptr > 0) {
         // pop stack
         int nodeIdx = stack[--ptr];
+        if (nodeIdx < 0 || nodeIdx >= nodes.length()) {
+            continue;
+        }
         BVHNode node = nodes[nodeIdx];
         
 
@@ -169,6 +196,9 @@ bool intersectScene(vec3 orig, vec3 dir, out float minT, out int hitIdx, out flo
 
             for (int i = 0; i < node.nPrimitives; i++) {
                 int triIndex = node.primitiveIdx + i;
+                if (triIndex < 0 || triIndex >= triangles.length()) {
+                    continue;
+                }
                 float t, u, v;
                 
                 if (intersectTriangle(orig, dir, triangles[triIndex].v0, triangles[triIndex].v1, triangles[triIndex].v2, t, u, v)) {
@@ -182,8 +212,12 @@ bool intersectScene(vec3 orig, vec3 dir, out float minT, out int hitIdx, out flo
             }
         } 
         else {
-            if (node.leftChild != -1)  stack[ptr++] = node.leftChild;
-            if (node.rightChild != -1) stack[ptr++] = node.rightChild;
+            if (node.leftChild != -1 && ptr < BVH_STACK_SIZE) {
+                stack[ptr++] = node.leftChild;
+            }
+            if (node.rightChild != -1 && ptr < BVH_STACK_SIZE) {
+                stack[ptr++] = node.rightChild;
+            }
         }
     }
 
@@ -234,6 +268,52 @@ vec3 sampleCosineHemisphere(vec3 N) {
     return normalize(tangent * x + bitangent * y + N * z);
 }
 
+void splatCaustic(ivec2 centerPix, vec3 energy)
+{
+    const int R = 2;
+    const float sigma = 1.25;
+    float weightSum = 0.0;
+
+    for (int dy = -R; dy <= R; ++dy) {
+        for (int dx = -R; dx <= R; ++dx) {
+            float r2 = float(dx * dx + dy * dy);
+            weightSum += exp(-r2 / (2.0 * sigma * sigma));
+        }
+    }
+
+    for (int dy = -R; dy <= R; ++dy) {
+        for (int dx = -R; dx <= R; ++dx) {
+            ivec2 p = centerPix + ivec2(dx, dy);
+            if (p.x < 0 || p.y < 0 || p.x >= imageWidth || p.y >= imageHeight) continue;
+
+            float r2 = float(dx * dx + dy * dy);
+            float w = exp(-r2 / (2.0 * sigma * sigma)) / max(weightSum, 1e-6);
+
+            vec4 oldV = imageLoad(causticImage, p);
+            imageStore(causticImage, p, vec4(oldV.rgb + energy * w, 1.0));
+        }
+    }
+}
+
+vec3 readFilteredCaustic(ivec2 pix)
+{
+    vec3 sum = vec3(0.0);
+    float wsum = 0.0;
+
+    for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            ivec2 p = pix + ivec2(dx, dy);
+            if (p.x < 0 || p.y < 0 || p.x >= imageWidth || p.y >= imageHeight) continue;
+
+            float w = (dx == 0 && dy == 0) ? 4.0 : ((dx == 0 || dy == 0) ? 2.0 : 1.0);
+            sum += imageLoad(causticImage, p).rgb * w;
+            wsum += w;
+        }
+    }
+
+    return sum / max(wsum, 1e-6);
+}
+
 bool worldToPixel(vec3 P, out ivec2 pix, out float viewZ) {
     vec3 rel = P - camPos;
     float z = dot(rel, camForward);
@@ -265,9 +345,14 @@ void sampleLight(out vec3 pos, out vec3 normal, out vec3 emit, out float pdf) {
     // emissive triangles area
     for (int i = 0; i < u_lightCount; i++) {
         int idx = lightIndices[i];
+        if (idx < 0 || idx >= triangles.length()) continue;
         vec3 e1 = triangles[idx].v1 - triangles[idx].v0;
         vec3 e2 = triangles[idx].v2 - triangles[idx].v0;
         total_emit_area += length(cross(e1, e2)) * 0.5;
+    }
+    if (total_emit_area <= 0.0) {
+        pdf = 0.0;
+        return;
     }
 
     // sample by area portion
@@ -277,6 +362,7 @@ void sampleLight(out vec3 pos, out vec3 normal, out vec3 emit, out float pdf) {
 
     for (int i = 0; i < u_lightCount; i++) {
         int idx = lightIndices[i];
+        if (idx < 0 || idx >= triangles.length()) continue;
         vec3 e1 = triangles[idx].v1 - triangles[idx].v0;
         vec3 e2 = triangles[idx].v2 - triangles[idx].v0;
         curr_area_sum += length(cross(e1, e2)) * 0.5;
@@ -284,6 +370,10 @@ void sampleLight(out vec3 pos, out vec3 normal, out vec3 emit, out float pdf) {
             targetTriIdx = idx;
             break;
         }
+    }
+    if (targetTriIdx < 0 || targetTriIdx >= triangles.length()) {
+        pdf = 0.0;
+        return;
     }
 
     // objects[k]->Sample(pos, pdf)
@@ -392,9 +482,8 @@ void photonPass(ivec2 launchPix) {
                 float viewZ;
                 if (worldToPixel(hitPoint, splatPix, viewZ)) {
                     float refDepth = 800.0;
-                    float perspectiveComp = clamp((refDepth * refDepth) / max(viewZ * viewZ, 1e-3), 0.25, 64.0);
-                    vec4 oldV = imageLoad(causticImage, splatPix);
-                    imageStore(causticImage, splatPix, vec4(oldV.rgb + flux * causticTint * perspectiveComp, 1.0));
+                    float perspectiveComp = clamp((refDepth * refDepth) / max(viewZ * viewZ, 1e-3), 0.5, 8.0);
+                    splatCaustic(splatPix, flux * causticTint * perspectiveComp);
                 }
             }
             break;
@@ -428,10 +517,8 @@ vec3 Render(vec3 d) {
                 finalColor = mix(horizonColor, groundColor, t);
             }
 
-            // --- 核心修改 ---
-            // 无论 bounce 是多少，都要把天空色乘上当前的能量权重(throughput)并加到输出里
             L_out += finalColor * throughput;
-            break; // 这条路径结束了，退出 for 循环
+            break;
         }
 
         Triangle hitTri = triangles[hitIdx];
@@ -455,12 +542,9 @@ vec3 Render(vec3 d) {
 
         if (!into && hitTri.texID > 0.5) {
 
-            // 计算吸收系数。你可以直接用 1.0 - hitTri.color 来定义吸收率
-            // 颜色越深，sigma 越大
             vec3 sigma = 1.0 - hitColor; 
-            float density = 0.0; // 控制玻璃颜色的浓度
+            float density = 0.0;
             
-            // 比尔定律公式
             throughput.r *= exp(-sigma.r * density * minT);
             throughput.g *= exp(-sigma.g * density * minT);
             throughput.b *= exp(-sigma.b * density * minT);
@@ -476,7 +560,6 @@ vec3 Render(vec3 d) {
         vec2 uv2 = vec2(hitTri.uv2U, hitTri.uv2V);
         vec2 hitUV = vec2(w * uv0 + u * uv1 + v * uv2);
 
-        // 击中光源：任意 bounce 都要累加 emission * throughput（路径贡献）
         if (length(hitTri.emission) > 0.1) {
             L_out += hitTri.emission * u_lightIntensity * throughput;
             break;
@@ -510,8 +593,7 @@ vec3 Render(vec3 d) {
         }
         */
 
-        // --- 修改后的 NEE 部分 ---
-        if (hitTri.texID < 0.5) { // 仅非透明物体（如地面）接收直接光阴影
+        if (hitTri.texID < 0.5) {
             vec3 l_pos, l_normal, l_emit;
             float pdf_light;
             sampleLight(l_pos, l_normal, l_emit, pdf_light);
@@ -519,39 +601,32 @@ vec3 Render(vec3 d) {
             vec3 lightDir = normalize(l_pos - hitPoint);
             float lightDist = length(l_pos - hitPoint);
 
-            vec3 shadowWeight = vec3(1.0); // 初始光强
-            vec3 shadowOrig = hitPoint + nl * 1e-3; // 使用定向法线 nl 偏移
+            vec3 shadowWeight = vec3(1.0);
+            vec3 shadowOrig = hitPoint + nl * 1e-3;
             float distLeft = lightDist;
 
-            // 穿透循环：允许光线穿过钻石的前后脸
             for (int s_bounce = 0; s_bounce < 4; s_bounce++) {
                 float sT, sU, sV;
                 int sIdx;
                 if (intersectScene(shadowOrig, lightDir, sT, sIdx, sU, sV) && sT < (distLeft - 1e-3)) {
                     Triangle sTri = triangles[sIdx];
                     if (sTri.texID > 0.5) {
-                        // --- 比尔定律模拟 ---
-                        // 钻石很亮，吸收系数 sigma 较小。1.0 - color 得到吸收率
                         vec3 sigma = 1.0 - sTri.color; 
-                        float shadowDensity = 0.01; // 钻石建议设低一点，保持晶莹感
+                        float shadowDensity = 0.01;
 
-                        // 这里的 sT 是光线在透明物体内部（或到下一个交点）的距离
                         shadowWeight *= exp(-sigma * shadowDensity * sT);
 
-                        // 伪造汇聚效果：如果是钻石，稍微补偿一点亮度
                         shadowWeight *= 3; 
                         shadowWeight = vec3(0.0) + sTri.color * shadowWeight;
 
-                        // 推进射线起点，继续探测
                         shadowOrig = shadowOrig + lightDir * (sT + 1e-3);
                         distLeft -= (sT + 1e-3);
                     } else {
-                        // 撞击到不透明物体，阴影彻底变黑
                         shadowWeight = vec3(0.0);
                         break;
                     }
                 } else {
-                    break; // 到达光源
+                    break;
                 }
             }
 
@@ -559,7 +634,6 @@ vec3 Render(vec3 d) {
                 vec3 f_r = evalBlinnPhong(hitTri, -d, lightDir, nl, hitUV);
                 float cosTheta = max(0.0, dot(nl, lightDir));
                 float cosTheta1 = max(0.0, dot(l_normal, -lightDir));
-                // 应用带颜色的 shadowWeight
                 L_out += (l_emit * f_r * cosTheta * cosTheta1 / (lightDist * lightDist) / pdf_light) * throughput * shadowWeight;
             }
         }
@@ -570,6 +644,7 @@ vec3 Render(vec3 d) {
 
         vec3 wi;
         float pdf;
+        int materialType = int(hitTri.materialType + 0.5);
         if (hitTri.texID > 0.5){
             float ior = u_ior;
             float kr = fresnel(currDir, nl, ior);
@@ -579,15 +654,24 @@ vec3 Render(vec3 d) {
             } else {
                 float eta = into ? (1.0 / ior) : ior;
                 wi = refract(currDir, nl, eta);
-                // 处理全反射
                 if (length(wi) < 0.01) wi = reflect(currDir, nl);
             }
             // throughput *= hitColor / RR;
             throughput *= 1.0 / RR;
         }
         else{
-            if (hitTri.specularExponent > 1000.0) {
-                wi = reflect(currDir, nl); 
+            if (materialType == MAT_METAL) {
+                vec3 idealReflect = reflect(currDir, nl);
+                float shininess = max(4.0, hitTri.specularExponent);
+                wi = samplePhongLobe(idealReflect, shininess);
+                if (dot(wi, nl) <= 0.0) wi = idealReflect;
+                pdf = 1.0;
+
+                vec3 baseTint = clamp(hitColor * 2.0, vec3(0.0), vec3(1.0));
+                vec3 metallicF0 = mix(hitTri.Ks, baseTint, 0.5);
+                throughput *= metallicF0 / RR;
+            } else if (materialType == MAT_MIRROR || hitTri.specularExponent > 1000.0) {
+                wi = reflect(currDir, nl);
                 pdf = 1.0;
                 throughput *= hitTri.Ks / RR;
             } else {
@@ -629,6 +713,114 @@ vec3 applyToneMapping(vec3 hdr) {
     return clamp(hdr, 0.0, 1.0); // mode 0: linear clamp
 }
 
+float luma(vec3 c) {
+    return dot(c, vec3(0.2126, 0.7152, 0.0722));
+}
+
+// Stable bloom: keep it strong but avoid aggressive feedback artifacts.
+vec3 computeGlow(ivec2 centerPix) {
+    const float glowThreshold = 0.65;
+    const float glowIntensity = 0.95;
+    const float glowTintMix = 0.55;
+    const float nearRadius = 5.0;
+    const float farRadius = 12.0;
+
+    vec3 sumNear = vec3(0.0);
+    float wsumNear = 0.0;
+    for (int y = -5; y <= 5; ++y) {
+        for (int x = -5; x <= 5; ++x) {
+            ivec2 p = centerPix + ivec2(x, y);
+            if (p.x < 0 || p.y < 0 || p.x >= imageWidth || p.y >= imageHeight) continue;
+
+            float r2 = float(x * x + y * y);
+            if (r2 > nearRadius * nearRadius) continue;
+            float w = exp(-r2 * 0.11);
+            vec4 src = imageLoad(outImage, p);
+            vec3 c = src.rgb;
+            float diamondMask = src.a;
+            float softMask = smoothstep(0.10, 0.90, diamondMask);
+            float b = max(luma(c) - glowThreshold, 0.0) * softMask;
+            if (b > 0.0) {
+                vec3 boosted = mix(vec3(b), c * b, glowTintMix);
+                sumNear += boosted * w;
+                wsumNear += w;
+            }
+        }
+    }
+
+    vec3 sumFar = vec3(0.0);
+    float wsumFar = 0.0;
+    for (int y = -12; y <= 12; ++y) {
+        for (int x = -12; x <= 12; ++x) {
+            ivec2 p = centerPix + ivec2(x, y);
+            if (p.x < 0 || p.y < 0 || p.x >= imageWidth || p.y >= imageHeight) continue;
+
+            float r2 = float(x * x + y * y);
+            if (r2 > farRadius * farRadius) continue;
+            float w = exp(-r2 * 0.025);
+            vec4 src = imageLoad(outImage, p);
+            vec3 c = src.rgb;
+            float diamondMask = src.a;
+            float softMask = smoothstep(0.10, 0.90, diamondMask);
+            float b = max(luma(c) - (glowThreshold + 0.05), 0.0) * softMask;
+            if (b > 0.0) {
+                vec3 boosted = mix(vec3(b), c * b, 0.65);
+                sumFar += boosted * w;
+                wsumFar += w;
+            }
+        }
+    }
+
+    vec3 nearBloom = (wsumNear > 1e-6) ? (sumNear / wsumNear) : vec3(0.0);
+    vec3 farBloom = (wsumFar > 1e-6) ? (sumFar / wsumFar) : vec3(0.0);
+
+    // Add a controlled star streak (cross + diagonals).
+    const ivec2 dirs[8] = ivec2[](
+        ivec2(1, 0), ivec2(-1, 0), ivec2(0, 1), ivec2(0, -1),
+        ivec2(1, 1), ivec2(-1, -1), ivec2(1, -1), ivec2(-1, 1)
+    );
+    vec3 streak = vec3(0.0);
+    float sw = 0.0;
+    for (int d = 0; d < 8; ++d) {
+        for (int s = 1; s <= 8; ++s) {
+            ivec2 p = centerPix + dirs[d] * s;
+            if (p.x < 0 || p.y < 0 || p.x >= imageWidth || p.y >= imageHeight) break;
+            float w = pow(1.0 - float(s) / 8.0, 2.0);
+            vec4 src = imageLoad(outImage, p);
+            vec3 c = src.rgb;
+            float diamondMask = src.a;
+            float softMask = smoothstep(0.10, 0.90, diamondMask);
+            float b = max(luma(c) - (glowThreshold + 0.08), 0.0) * softMask;
+            if (b > 0.0) {
+                streak += c * b * w;
+                sw += w;
+            }
+        }
+    }
+    if (sw > 1e-6) streak /= sw;
+
+    vec3 glow = nearBloom * 0.9 + farBloom * 1.05 + streak * 0.95;
+    glow *= glowIntensity;
+    glow *= vec3(0.90, 0.97, 1.12);
+    return min(glow, vec3(1.4));
+}
+
+float primaryDiamondMask(vec3 dir) {
+    float t, u, v;
+    int hitIdx;
+    if (!intersectScene(camPos, dir, t, hitIdx, u, v)) return 0.0;
+    Triangle hitTri = triangles[hitIdx];
+    return (hitTri.texID > 0.5) ? 1.0 : 0.0;
+}
+
+vec3 primaryRayDir(float px, float py) {
+    float aspect = float(imageWidth) / float(imageHeight);
+    float scale = tan(radians(fov * 0.5));
+    float x = (2.0 * px / float(imageWidth) - 1.0) * aspect * scale;
+    float y = (1.0 - 2.0 * py / float(imageHeight)) * scale;
+    return normalize(-x * camRight + y * camUp + camForward);
+}
+
 void main()
 {
     uint i = gl_GlobalInvocationID.x;
@@ -659,6 +851,7 @@ void main()
     float scale = tan(radians(fov * 0.5));
 
     vec3 currentSample = vec3(0);
+    float diamondMask = 0.0;
 
     if (SuperSample > 0.5)
     {
@@ -670,8 +863,10 @@ void main()
             // vec3 dir = normalize(vec3(-x, y, 1.0));
             vec3 dir = normalize(-x * camRight + y * camUp + camForward);
             currentSample += Render(dir);
+            diamondMask += primaryDiamondMask(dir);
         }
         currentSample /= 4;
+        diamondMask /= 4.0;
     }
     else{
         float x = (2.0 * (float(i) + rand()) / float(imageWidth) - 1.0)
@@ -680,9 +875,12 @@ void main()
                   * scale;
         vec3 dir = normalize(-x * camRight + y * camUp + camForward);
         currentSample = Render(dir);
+        // Use deterministic center ray for mask to avoid frame-to-frame dotted artifacts.
+        vec3 stableMaskDir = primaryRayDir(float(i) + 0.5, float(j) + 0.5);
+        diamondMask = primaryDiamondMask(stableMaskDir);
     }
 
-    vec3 causticAvg = imageLoad(causticImage, ivec2(i, j)).rgb / max(float(frameCount + 1), 1.0);
+    vec3 causticAvg = readFilteredCaustic(ivec2(i, j)) / max(float(frameCount + 1), 1.0);
     // Lift caustic mid/low values so patterns are easier to see
     vec3 causticBoosted = pow(max(causticAvg, vec3(0.0)), vec3(0.75));
     // Reduce saturation while preserving brightness contrast
@@ -692,14 +890,19 @@ void main()
 
     vec3 mapped = applyToneMapping(currentSample);
     vec3 finalColor = pow(mapped, vec3(1.0 / 2.2));
+    if (frameCount > 0) {
+        finalColor += computeGlow(ivec2(i, j));
+        finalColor = clamp(finalColor, 0.0, 1.0);
+    }
     if (frameCount == 0) {
-        imageStore(outImage, ivec2(i, j), vec4(finalColor, 1.0));
+        imageStore(outImage, ivec2(i, j), vec4(finalColor, diamondMask));
     } else {
         vec4 lastColor = imageLoad(outImage, ivec2(i, j));
         // oldCOlor * (n/(n+1)) + NewColor * (1/(n+1))
         float weight = 1.0 / float(frameCount + 1);
         vec3 accumulated = mix(lastColor.rgb, finalColor, weight);
-        imageStore(outImage, ivec2(i, j), vec4(accumulated, 1.0));
+        float accumulatedMask = mix(lastColor.a, diamondMask, 0.15);
+        imageStore(outImage, ivec2(i, j), vec4(accumulated, accumulatedMask));
     }
     
 }

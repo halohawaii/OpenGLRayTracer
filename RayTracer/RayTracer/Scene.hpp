@@ -15,9 +15,9 @@
 
 struct HitGPU
 {
-    float t;          // 距离
-    float nx, ny, nz; // 法线
-    int triId;        // 命中的三角形 index
+    float t;
+    float nx, ny, nz;
+    int triId;
 };
 
 class Scene

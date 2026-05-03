@@ -110,6 +110,7 @@ public:
 
         auto col = m->Kd;
         tg.color[0] = col.x; tg.color[1] = col.y; tg.color[2] = col.z;
+        tg.materialType = static_cast<float>(m->m_type);
         tg.normal[0] = normal.x; tg.normal[1] = normal.y; tg.normal[2] = normal.z;
         tg.emission[0] = m->getEmission().x; tg.emission[1] = m->getEmission().y; tg.emission[2] = m->getEmission().z;
 
@@ -123,11 +124,11 @@ public:
     MeshTriangle(const std::string& filename, Material *mt = new Material(), bool needNormalLerp = false, int texID = -1)
     {
         objl::Loader loader;
-        loader.LoadFile(filename);
+        bool loaded = loader.LoadFile(filename);
         area = 0;
         m = mt;
-        assert(loader.LoadedMeshes.size() == 1);
-        auto mesh = loader.LoadedMeshes[0];
+        assert(loaded);
+        assert(!loader.LoadedMeshes.empty());
 
         Vector3f min_vert = Vector3f{std::numeric_limits<float>::infinity(),
                                      std::numeric_limits<float>::infinity(),
@@ -135,49 +136,51 @@ public:
         Vector3f max_vert = Vector3f{-std::numeric_limits<float>::infinity(),
                                      -std::numeric_limits<float>::infinity(),
                                      -std::numeric_limits<float>::infinity()};
-        for (int i = 0; i < mesh.Vertices.size(); i += 3) {
-            std::array<Vector3f, 3> face_vertices;
-            std::array<Vector3f, 3> vertexNormal;
-            std::array<Vector2f, 3> vertexUV;
-            for (int j = 0; j < 3; j++) {
-                auto vert = Vector3f(mesh.Vertices[i + j].Position.X,
-                                     mesh.Vertices[i + j].Position.Y,
-                                     mesh.Vertices[i + j].Position.Z);
-                face_vertices[j] = vert;
+        for (const auto& mesh : loader.LoadedMeshes) {
+            for (size_t i = 0; i + 2 < mesh.Vertices.size(); i += 3) {
+                std::array<Vector3f, 3> face_vertices;
+                std::array<Vector3f, 3> vertexNormal;
+                std::array<Vector2f, 3> vertexUV;
+                for (int j = 0; j < 3; j++) {
+                    auto vert = Vector3f(mesh.Vertices[i + j].Position.X,
+                                         mesh.Vertices[i + j].Position.Y,
+                                         mesh.Vertices[i + j].Position.Z);
+                    face_vertices[j] = vert;
 
-                min_vert = Vector3f(std::min(min_vert.x, vert.x),
-                                    std::min(min_vert.y, vert.y),
-                                    std::min(min_vert.z, vert.z));
-                max_vert = Vector3f(std::max(max_vert.x, vert.x),
-                                    std::max(max_vert.y, vert.y),
-                                    std::max(max_vert.z, vert.z));
+                    min_vert = Vector3f(std::min(min_vert.x, vert.x),
+                                        std::min(min_vert.y, vert.y),
+                                        std::min(min_vert.z, vert.z));
+                    max_vert = Vector3f(std::max(max_vert.x, vert.x),
+                                        std::max(max_vert.y, vert.y),
+                                        std::max(max_vert.z, vert.z));
 
-                if (needNormalLerp)
-                {
-                    auto VN = Vector3f(
-                        mesh.Vertices[i + j].Normal.X,
-                        mesh.Vertices[i + j].Normal.Y,
-                        mesh.Vertices[i + j].Normal.Z
-                    );
-                    vertexNormal[j] = VN;
+                    if (needNormalLerp)
+                    {
+                        auto VN = Vector3f(
+                            mesh.Vertices[i + j].Normal.X,
+                            mesh.Vertices[i + j].Normal.Y,
+                            mesh.Vertices[i + j].Normal.Z
+                        );
+                        vertexNormal[j] = VN;
+                    }
+
+                    Vector2f uv = Vector2f(mesh.Vertices[i + j].TextureCoordinate.X, mesh.Vertices[i + j].TextureCoordinate.Y);
+                    vertexUV[j] = uv;
                 }
 
-                Vector2f uv = Vector2f(mesh.Vertices[i + j].TextureCoordinate.X, mesh.Vertices[i + j].TextureCoordinate.Y);
-                vertexUV[j] = uv;
+                triangles.emplace_back(face_vertices[0], 
+                                       face_vertices[1],
+                                       face_vertices[2],
+                                       vertexNormal[0], 
+                                       vertexNormal[1], 
+                                       vertexNormal[2], 
+                                       vertexUV[0],
+                                       vertexUV[1],
+                                       vertexUV[2],
+                                       texID,
+                                       mt, 
+                                       needNormalLerp);
             }
-
-            triangles.emplace_back(face_vertices[0], 
-                                   face_vertices[1],
-                                   face_vertices[2],
-                                   vertexNormal[0], 
-                                   vertexNormal[1], 
-                                   vertexNormal[2], 
-                                   vertexUV[0],
-                                   vertexUV[1],
-                                   vertexUV[2],
-                                   texID,
-                                   mt, 
-                                   needNormalLerp);
         }
 
         bounding_box = Bounds3(min_vert, max_vert);
@@ -198,14 +201,13 @@ public:
             auto& tri = triangles[i];
             TriangleGPU tg;
 
-            // 填充顶点数据
             tg.v0[0] = tri.v0.x; tg.v0[1] = tri.v0.y; tg.v0[2] = tri.v0.z;
             tg.v1[0] = tri.v1.x; tg.v1[1] = tri.v1.y; tg.v1[2] = tri.v1.z;
             tg.v2[0] = tri.v2.x; tg.v2[1] = tri.v2.y; tg.v2[2] = tri.v2.z;
 
-            // 填充颜色（从材质中获取）
             auto col = tri.m->Kd;
             tg.color[0] = col.x; tg.color[1] = col.y; tg.color[2] = col.z;
+            tg.materialType = static_cast<float>(m->m_type);
             tg.normal[0] = tri.normal.x; tg.normal[1] = tri.normal.y; tg.normal[2] = tri.normal.z;
             tg.emission[0] = m->getEmission().x; tg.emission[1] = m->getEmission().y; tg.emission[2] = m->getEmission().z;
             tg.Ks[0] = m->Ks.x; tg.Ks[1] = m->Ks.y; tg.Ks[2] = m->Ks.z;
